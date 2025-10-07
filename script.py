@@ -1,17 +1,13 @@
 import pyaudio
-import numpy as np
-import wave
 import threading
 import time
 import queue
-from scipy import signal
-from scipy.io import wavfile
-import torch
-from transformers import WhisperProcessor, WhisperForConditionalGeneration
-from llama_cpp import Llama
 import tempfile
 import os
 import pyttsx3
+import torch
+from transformers import WhisperProcessor, WhisperForConditionalGeneration
+from llama_cpp import Llama
 
 class SpeechChatbot:
     def __init__(self, record_duration=5.0, sample_rate=16000, chunk_size=1024):
@@ -22,68 +18,45 @@ class SpeechChatbot:
         self.audio_format = pyaudio.paInt16
         self.channels = 1
         
-        # Initialize audio
+        # Audio state
         self.audio = pyaudio.PyAudio()
         self.stream = None
-        
-        # Audio buffers and state
         self.audio_buffer = []
         self.is_recording = False
         self.recording_start_time = None
         self.audio_queue = queue.Queue()
         
-        # Initialize Whisper (using the base English model)
+        # Models
         print("Loading Whisper model...")
         self.processor = WhisperProcessor.from_pretrained("openai/whisper-base.en")
         self.whisper_model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-base.en")
-        self.whisper_model.config.forced_decoder_ids = None
         
-        # Initialize Llama
         print("Loading Llama model...")
         self.llm = Llama.from_pretrained(
             repo_id="unsloth/Qwen3-1.7B-GGUF",
             filename="Qwen3-1.7B-Q4_0.gguf",
-            n_ctx=4096,  # Context window size
+            n_ctx=4096,
             verbose=False
         )
         
-        # Initialize Text-to-Speech
+        # Text-to-Speech
         print("Initializing Text-to-Speech...")
         self.tts_engine = pyttsx3.init()
-        
-        # Configure TTS settings
-        self.tts_engine.setProperty('rate', 150)  # Speech rate (words per minute)
-        self.tts_engine.setProperty('volume', 0.8)  # Volume level (0.0 to 1.0)
-        
-        # Get available voices and set a preferred one if available
-        voices = self.tts_engine.getProperty('voices')
-        if voices:
-            # Prefer female voices if available, otherwise use first available
-            for voice in voices:
-                if 'female' in voice.name.lower():
-                    self.tts_engine.setProperty('voice', voice.id)
-                    break
-            else:
-                self.tts_engine.setProperty('voice', voices[0].id)
+        self.tts_engine.setProperty('rate', 150)
+        self.tts_engine.setProperty('volume', 0.8)
         
         # Conversation context
         self.conversation_context = []
         
     def audio_callback(self, in_data, frame_count, time_info, status):
         """Callback function for audio stream"""
-        if status:
-            print(f"Audio callback status: {status}")
-        
-        # Always add to buffer if recording
         if self.is_recording:
             self.audio_buffer.append(in_data)
             
-            # Check if recording duration has been reached
             if (time.time() - self.recording_start_time) > self.record_duration:
                 self.is_recording = False
-                print("Recording duration reached, processing audio...")
+                print("Recording complete, processing...")
                 
-                # Save the audio buffer to process
                 if self.audio_buffer:
                     audio_data = b''.join(self.audio_buffer)
                     self.audio_queue.put(audio_data)
@@ -94,50 +67,24 @@ class SpeechChatbot:
     def save_audio_to_temp(self, audio_data):
         """Save audio data to temporary WAV file"""
         with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
-            with wave.open(temp_file.name, 'wb') as wf:
-                wf.setnchannels(self.channels)
-                wf.setsampwidth(self.audio.get_sample_size(self.audio_format))
-                wf.setframerate(self.sample_rate)
-                wf.writeframes(audio_data)
+            with open(temp_file.name, 'wb') as f:
+                f.write(audio_data)
             return temp_file.name
     
     def transcribe_audio(self, audio_file_path):
         """Transcribe audio using Whisper"""
         try:
-            # Load and preprocess audio
-            audio_array, sampling_rate = wavfile.read(audio_file_path)
+            # Let Whisper handle all the preprocessing
+            with open(audio_file_path, "rb") as f:
+                audio_data = f.read()
             
-            # Resample if necessary
-            if sampling_rate != 16000:
-                # Convert to float for resampling
-                audio_array = audio_array.astype(np.float32)
-                audio_array = signal.resample(audio_array, 
-                                            int(len(audio_array) * 16000 / sampling_rate))
-            
-            # Handle stereo audio by converting to mono
-            if len(audio_array.shape) > 1:
-                audio_array = np.mean(audio_array, axis=1)
-            
-            # Ensure audio array is not empty
-            if audio_array.size == 0:
-                print("Empty audio array")
-                return None
-            
-            # Process audio - convert to expected format for Whisper
-            # Whisper expects 16kHz mono audio as float32
-            audio_array = audio_array.astype(np.float32)
-            
-            # Normalize audio if it's not already normalized
-            if np.max(np.abs(audio_array)) > 0:
-                audio_array = audio_array / np.max(np.abs(audio_array))
-            
+            # Process directly with Whisper
             input_features = self.processor(
-                audio_array, 
+                audio_data, 
                 sampling_rate=16000, 
                 return_tensors="pt"
             ).input_features
             
-            # Generate transcription
             predicted_ids = self.whisper_model.generate(input_features)
             transcription = self.processor.batch_decode(predicted_ids, skip_special_tokens=True)[0]
             
@@ -147,42 +94,31 @@ class SpeechChatbot:
             return None
     
     def text_to_speech(self, text):
-        """Convert text to speech and play it"""
-        if not text:
-            return
-        
-        print(f"Speaking: {text}")
-        try:
-            # Speak the text
+        """Convert text to speech"""
+        if text:
+            print(f"Assistant: {text}")
             self.tts_engine.say(text)
             self.tts_engine.runAndWait()
-        except Exception as e:
-            print(f"Error in text-to-speech: {e}")
     
     def process_with_llama(self, text):
-        """Process text with Llama and maintain context"""
+        """Process text with Llama"""
         if not text:
             return None
         
-        # Add user message to context
         self.conversation_context.append({"role": "user", "content": text})
         
-        # Keep only recent context to manage token limits
-        if len(self.conversation_context) > 10:  # Keep last 10 exchanges
+        # Keep context manageable
+        if len(self.conversation_context) > 10:
             self.conversation_context = self.conversation_context[-10:]
         
         try:
-            # Generate response
             response = self.llm.create_chat_completion(
                 messages=self.conversation_context,
                 max_tokens=256,
                 temperature=0.7,
-                stop=["</s>", "\n\n"]
             )
             
             assistant_message = response['choices'][0]['message']['content']
-            
-            # Add assistant response to context
             self.conversation_context.append({"role": "assistant", "content": assistant_message})
             
             return assistant_message
@@ -191,40 +127,33 @@ class SpeechChatbot:
             return None
     
     def process_audio_worker(self):
-        """Worker thread to process audio in background"""
+        """Worker thread to process audio"""
         while True:
             try:
                 audio_data = self.audio_queue.get(timeout=1.0)
-                if audio_data is None:  # Shutdown signal
+                if audio_data is None:
                     break
                 
-                # Save audio to temporary file
                 temp_audio_file = self.save_audio_to_temp(audio_data)
                 
                 try:
-                    # Transcribe audio
-                    print("Transcribing audio...")
+                    print("Transcribing...")
                     transcription = self.transcribe_audio(temp_audio_file)
                     
-                    if transcription and len(transcription) > 2:  # Minimum length check
+                    if transcription and len(transcription) > 2:
                         print(f"User: {transcription}")
                         
-                        # Process with Llama
-                        print("Processing with Llama...")
+                        print("Generating response...")
                         response = self.process_with_llama(transcription)
                         
                         if response:
-                            print(f"Assistant: {response}")
-                            # Convert response to speech
-                            print("Converting response to speech...")
                             self.text_to_speech(response)
                         else:
                             print("No response generated")
                     else:
-                        print("No valid transcription detected")
+                        print("No speech detected")
                         
                 finally:
-                    # Clean up temporary file
                     try:
                         os.unlink(temp_audio_file)
                     except:
@@ -237,11 +166,11 @@ class SpeechChatbot:
     
     def start(self):
         """Start the chatbot"""
-        print("Starting speech chatbot...")
-        print(f"Recording duration: {self.record_duration} seconds")
-        print("Press Enter to start recording, or Ctrl+C to stop...")
+        print("Starting Speech Chatbot...")
+        print(f"Record duration: {self.record_duration} seconds")
+        print("Press Enter to record, Ctrl+C to exit")
         
-        # Start audio processing thread
+        # Start processing thread
         processing_thread = threading.Thread(target=self.process_audio_worker, daemon=True)
         processing_thread.start()
         
@@ -259,7 +188,6 @@ class SpeechChatbot:
         
         try:
             while True:
-                # Wait for user to press Enter to start recording
                 input("Press Enter to start recording...")
                 
                 if not self.is_recording:
@@ -267,10 +195,9 @@ class SpeechChatbot:
                     self.recording_start_time = time.time()
                     self.audio_buffer = []
                     print(f"Recording for {self.record_duration} seconds...")
-                    print("Speak now...")
                     
         except KeyboardInterrupt:
-            print("\nStopping chatbot...")
+            print("\nShutting down...")
         finally:
             self.stop()
     
@@ -280,16 +207,13 @@ class SpeechChatbot:
             self.stream.stop_stream()
             self.stream.close()
         self.audio.terminate()
-        if hasattr(self, 'tts_engine'):
-            self.tts_engine.stop()
-        self.audio_queue.put(None)  # Signal worker to stop
+        self.audio_queue.put(None)
 
-# Usage example
 if __name__ == "__main__":
     chatbot = SpeechChatbot(
-        record_duration=5.0,   # Record for 5 seconds
-        sample_rate=16000,     # Whisper expects 16kHz
-        chunk_size=1024        # Audio chunk size
+        record_duration=5.0,
+        sample_rate=16000,
+        chunk_size=1024
     )
     
     chatbot.start()
