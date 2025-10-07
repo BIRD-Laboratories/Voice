@@ -11,6 +11,7 @@ from transformers import WhisperProcessor, WhisperForConditionalGeneration
 from llama_cpp import Llama
 import tempfile
 import os
+import pyttsx3
 
 class SpeechChatbot:
     def __init__(self, record_duration=5.0, sample_rate=16000, chunk_size=1024):
@@ -45,6 +46,25 @@ class SpeechChatbot:
             n_ctx=4096,  # Context window size
             verbose=False
         )
+        
+        # Initialize Text-to-Speech
+        print("Initializing Text-to-Speech...")
+        self.tts_engine = pyttsx3.init()
+        
+        # Configure TTS settings
+        self.tts_engine.setProperty('rate', 150)  # Speech rate (words per minute)
+        self.tts_engine.setProperty('volume', 0.8)  # Volume level (0.0 to 1.0)
+        
+        # Get available voices and set a preferred one if available
+        voices = self.tts_engine.getProperty('voices')
+        if voices:
+            # Prefer female voices if available, otherwise use first available
+            for voice in voices:
+                if 'female' in voice.name.lower():
+                    self.tts_engine.setProperty('voice', voice.id)
+                    break
+            else:
+                self.tts_engine.setProperty('voice', voices[0].id)
         
         # Conversation context
         self.conversation_context = []
@@ -108,6 +128,19 @@ class SpeechChatbot:
             print(f"Error in transcription: {e}")
             return None
     
+    def text_to_speech(self, text):
+        """Convert text to speech and play it"""
+        if not text:
+            return
+        
+        print(f"Speaking: {text}")
+        try:
+            # Speak the text
+            self.tts_engine.say(text)
+            self.tts_engine.runAndWait()
+        except Exception as e:
+            print(f"Error in text-to-speech: {e}")
+    
     def process_with_llama(self, text):
         """Process text with Llama and maintain context"""
         if not text:
@@ -164,6 +197,9 @@ class SpeechChatbot:
                         
                         if response:
                             print(f"Assistant: {response}")
+                            # Convert response to speech
+                            print("Converting response to speech...")
+                            self.text_to_speech(response)
                         else:
                             print("No response generated")
                     else:
@@ -225,6 +261,7 @@ class SpeechChatbot:
             self.stream.stop_stream()
             self.stream.close()
         self.audio.terminate()
+        self.tts_engine.stop()
         self.audio_queue.put(None)  # Signal worker to stop
 
 # Usage example
