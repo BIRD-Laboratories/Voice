@@ -109,10 +109,28 @@ class SpeechChatbot:
             
             # Resample if necessary
             if sampling_rate != 16000:
+                # Convert to float for resampling
+                audio_array = audio_array.astype(np.float32)
                 audio_array = signal.resample(audio_array, 
                                             int(len(audio_array) * 16000 / sampling_rate))
             
-            # Process audio
+            # Handle stereo audio by converting to mono
+            if len(audio_array.shape) > 1:
+                audio_array = np.mean(audio_array, axis=1)
+            
+            # Ensure audio array is not empty
+            if audio_array.size == 0:
+                print("Empty audio array")
+                return None
+            
+            # Process audio - convert to expected format for Whisper
+            # Whisper expects 16kHz mono audio as float32
+            audio_array = audio_array.astype(np.float32)
+            
+            # Normalize audio if it's not already normalized
+            if np.max(np.abs(audio_array)) > 0:
+                audio_array = audio_array / np.max(np.abs(audio_array))
+            
             input_features = self.processor(
                 audio_array, 
                 sampling_rate=16000, 
@@ -249,6 +267,7 @@ class SpeechChatbot:
                     self.recording_start_time = time.time()
                     self.audio_buffer = []
                     print(f"Recording for {self.record_duration} seconds...")
+                    print("Speak now...")
                     
         except KeyboardInterrupt:
             print("\nStopping chatbot...")
@@ -261,7 +280,8 @@ class SpeechChatbot:
             self.stream.stop_stream()
             self.stream.close()
         self.audio.terminate()
-        self.tts_engine.stop()
+        if hasattr(self, 'tts_engine'):
+            self.tts_engine.stop()
         self.audio_queue.put(None)  # Signal worker to stop
 
 # Usage example
