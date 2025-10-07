@@ -5,7 +5,7 @@ import queue
 import tempfile
 import os
 import pyttsx3
-import torch
+import wave
 from transformers import WhisperProcessor, WhisperForConditionalGeneration
 from llama_cpp import Llama
 
@@ -65,25 +65,27 @@ class SpeechChatbot:
         return (in_data, pyaudio.paContinue)
     
     def save_audio_to_temp(self, audio_data):
-        """Save audio data to temporary WAV file"""
+        """Save audio data to proper WAV file"""
         with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
-            with open(temp_file.name, 'wb') as f:
-                f.write(audio_data)
+            with wave.open(temp_file.name, 'wb') as wf:
+                wf.setnchannels(self.channels)
+                wf.setsampwidth(self.audio.get_sample_size(self.audio_format))
+                wf.setframerate(self.sample_rate)
+                wf.writeframes(audio_data)
             return temp_file.name
     
     def transcribe_audio(self, audio_file_path):
         """Transcribe audio using Whisper"""
         try:
-            # Let Whisper handle all the preprocessing
+            # Load audio file properly
             with open(audio_file_path, "rb") as f:
-                audio_data = f.read()
+                inputs = self.processor(
+                    f.read(),
+                    sampling_rate=16000,
+                    return_tensors="pt"
+                )
             
-            # Process directly with Whisper
-            input_features = self.processor(
-                audio_data, 
-                sampling_rate=16000, 
-                return_tensors="pt"
-            ).input_features
+            input_features = inputs.input_features
             
             predicted_ids = self.whisper_model.generate(input_features)
             transcription = self.processor.batch_decode(predicted_ids, skip_special_tokens=True)[0]
@@ -195,6 +197,7 @@ class SpeechChatbot:
                     self.recording_start_time = time.time()
                     self.audio_buffer = []
                     print(f"Recording for {self.record_duration} seconds...")
+                    print("Speak now...")
                     
         except KeyboardInterrupt:
             print("\nShutting down...")
