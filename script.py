@@ -13,10 +13,9 @@ import tempfile
 import os
 
 class SpeechChatbot:
-    def __init__(self, mic_threshold=0.01, silence_timeout=7.0, sample_rate=16000, chunk_size=1024):
+    def __init__(self, record_duration=5.0, sample_rate=16000, chunk_size=1024):
         # Audio parameters
-        self.mic_threshold = mic_threshold
-        self.silence_timeout = silence_timeout
+        self.record_duration = record_duration
         self.sample_rate = sample_rate
         self.chunk_size = chunk_size
         self.audio_format = pyaudio.paInt16
@@ -29,7 +28,7 @@ class SpeechChatbot:
         # Audio buffers and state
         self.audio_buffer = []
         self.is_recording = False
-        self.last_speech_time = None
+        self.recording_start_time = None
         self.audio_queue = queue.Queue()
         
         # Initialize Whisper (using the base English model)
@@ -50,34 +49,19 @@ class SpeechChatbot:
         # Conversation context
         self.conversation_context = []
         
-    def is_speech(self, audio_data):
-        """Check if audio data contains speech using energy threshold"""
-        audio_array = np.frombuffer(audio_data, dtype=np.int16)
-        energy = np.sqrt(np.mean(audio_array**2)) / 32768.0  # Normalize to 0-1
-        
-        # Simple energy-based speech detection
-        return energy > self.mic_threshold
-    
     def audio_callback(self, in_data, frame_count, time_info, status):
         """Callback function for audio stream"""
         if status:
             print(f"Audio callback status: {status}")
         
-        # Check if this chunk contains speech
-        if self.is_speech(in_data):
-            self.last_speech_time = time.time()
-            if not self.is_recording:
-                self.is_recording = True
-                print("Speech detected, starting recording...")
-        
-        # Add to buffer if recording
+        # Always add to buffer if recording
         if self.is_recording:
             self.audio_buffer.append(in_data)
             
-            # Check if we've been silent for too long
-            if (time.time() - self.last_speech_time) > self.silence_timeout:
+            # Check if recording duration has been reached
+            if (time.time() - self.recording_start_time) > self.record_duration:
                 self.is_recording = False
-                print("Silence detected, processing audio...")
+                print("Recording duration reached, processing audio...")
                 
                 # Save the audio buffer to process
                 if self.audio_buffer:
@@ -200,9 +184,8 @@ class SpeechChatbot:
     def start(self):
         """Start the chatbot"""
         print("Starting speech chatbot...")
-        print(f"Speech threshold: {self.mic_threshold}")
-        print(f"Silence timeout: {self.silence_timeout} seconds")
-        print("Speak to start conversation!")
+        print(f"Recording duration: {self.record_duration} seconds")
+        print("Press Enter to start recording, or Ctrl+C to stop...")
         
         # Start audio processing thread
         processing_thread = threading.Thread(target=self.process_audio_worker, daemon=True)
@@ -219,11 +202,18 @@ class SpeechChatbot:
         )
         
         self.stream.start_stream()
-        self.last_speech_time = time.time()
         
         try:
             while True:
-                time.sleep(0.1)
+                # Wait for user to press Enter to start recording
+                input("Press Enter to start recording...")
+                
+                if not self.is_recording:
+                    self.is_recording = True
+                    self.recording_start_time = time.time()
+                    self.audio_buffer = []
+                    print(f"Recording for {self.record_duration} seconds...")
+                    
         except KeyboardInterrupt:
             print("\nStopping chatbot...")
         finally:
@@ -239,12 +229,10 @@ class SpeechChatbot:
 
 # Usage example
 if __name__ == "__main__":
-    # Adjust these parameters based on your environment
     chatbot = SpeechChatbot(
-        mic_threshold=0.02,  # Adjust based on your microphone sensitivity
-        silence_timeout=7.0,  # 7 seconds of silence to stop recording
-        sample_rate=16000,    # Whisper expects 16kHz
-        chunk_size=1024       # Audio chunk size
+        record_duration=5.0,   # Record for 5 seconds
+        sample_rate=16000,     # Whisper expects 16kHz
+        chunk_size=1024        # Audio chunk size
     )
     
     chatbot.start()
