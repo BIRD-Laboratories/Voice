@@ -270,23 +270,29 @@ def create_interface(ai_system: AIAssistant):
                 max_lines=5
             )
 
-        # This function returns full result (not a generator)
-        def auto_infer_simple():
-            audio_array = ai_system.recorder.get_last_chunk()
-            if audio_array is None or len(audio_array) < 1000:
-                return "", ""
-            transcription = ai_system.transcribe_from_array(audio_array)
-            if not transcription or "ERROR" in transcription:
-                return transcription, ""
-            response = ai_system.generate_response(transcription)
-            return transcription, response
+        # Create a hidden button to trigger the generator
+        hidden_btn = gr.Button(visible=False)
 
-        # Use every=10 to call every 10 seconds
-        demo.load(
-            fn=auto_infer_simple,
+        # Timer that clicks the hidden button every 10 seconds
+        timer = gr.Timer(10)
+        timer.tick(fn=lambda: None, inputs=None, outputs=None, every=1)  # dummy tick to start timer
+
+        # Connect hidden button to the inference generator
+        def run_inference():
+            yield from ai_system.auto_infer()
+
+        hidden_btn.click(
+            fn=run_inference,
             inputs=None,
             outputs=[trans, resp],
-            every=10  # ✅ This is valid for non-generator functions
+            show_progress="minimal"
+        )
+
+        # Start the timer automatically when the page loads
+        demo.load(
+            fn=lambda: gr.Timer(active=True),
+            inputs=None,
+            outputs=timer
         )
 
         gr.HTML("""
