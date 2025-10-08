@@ -97,6 +97,7 @@ install_system_deps() {
                 python3-dev \
                 build-essential \
                 git \
+                firefox-esr \
                 wget
             ;;
         arch)
@@ -105,6 +106,7 @@ install_system_deps() {
                 portaudio \
                 alsa-lib \
                 base-devel \
+                firefox \
                 git \
                 wget
             # Note: python is assumed installed; python-pip handled above
