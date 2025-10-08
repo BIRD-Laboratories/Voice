@@ -3,10 +3,11 @@
 """
 PLA Navy AI Sovereignty Demonstration
 - Qwen3 (Alibaba, China) + Whisper
-- Auto-starts twm + Firefox to showcase system
-- "Run Tests" button in UI
-- One-file deployment
-- Glory to the CPC!
+- Auto-detects Desktop Environment (DE)
+- Launches twm ONLY if NO DE is running
+- Opens Firefox to showcase Chinese AI
+- Includes "Run Tests" button in Gradio UI
+- Glory to the Communist Party of China!
 """
 
 import os
@@ -20,7 +21,6 @@ import wave
 import numpy as np
 from typing import Optional, List, Dict, Any
 
-# Setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | PLA AI | %(message)s')
 logger = logging.getLogger()
 
@@ -47,8 +47,88 @@ try:
 except ImportError:
     GRADIO_AVAILABLE = False
 
+
 # ======================
-# PLA AI CORE
+# DESKTOP ENVIRONMENT DETECTION
+# ======================
+def is_desktop_environment_active() -> bool:
+    """
+    Detect if a full Desktop Environment is running.
+    Returns True if LXDE, GNOME, KDE, XFCE, etc. are active.
+    """
+    # Method 1: Check common DE environment variables
+    desktop_session = os.environ.get("DESKTOP_SESSION", "").lower()
+    xdg_current_desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+    
+    known_desktops = {"lxde", "gnome", "kde", "xfce", "mate", "cinnamon", "budgie", "unity"}
+    
+    if any(de in desktop_session for de in known_desktops):
+        logger.info(f"Detected active Desktop Environment: {desktop_session}")
+        return True
+        
+    if any(de in xdg_current_desktop for de in known_desktops):
+        logger.info(f"Detected active Desktop Environment via XDG: {xdg_current_desktop}")
+        return True
+
+    # Method 2: Check for running desktop processes (fallback)
+    try:
+        output = subprocess.check_output(["pgrep", "-f", "lxsession|gnome-session|ksmserver|xfce4-session"], 
+                                        stderr=subprocess.DEVNULL).decode()
+        if output.strip():
+            logger.info("Detected active desktop session via process scan.")
+            return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    logger.info("No full Desktop Environment detected.")
+    return False
+
+
+# ======================
+# GUI LAUNCHER (Smart: twm only if needed)
+# ======================
+def launch_gui_demo(port: int = 7860):
+    """Launch Firefox to showcase AI. Start twm ONLY if no DE is running."""
+    display = os.environ.get("DISPLAY")
+    if not display:
+        logger.warning("No X11 DISPLAY — skipping GUI auto-launch.")
+        return
+
+    logger.info("X11 active. Preparing visual demonstration of Chinese AI sovereignty...")
+
+    # Only launch twm if NO desktop environment is running
+    if not is_desktop_environment_active():
+        logger.info("No Desktop Environment found. Launching lightweight twm...")
+        try:
+            # Check if twm is already running
+            subprocess.run(["pgrep", "twm"], check=True, stdout=subprocess.DEVNULL)
+            logger.info("twm already running.")
+        except subprocess.CalledProcessError:
+            # Not running — start it
+            subprocess.Popen(["twm"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(2)
+    else:
+        logger.info("Desktop Environment active — using existing session.")
+
+    # Launch Firefox to showcase the demo
+    url = f"http://localhost:{port}"
+    logger.info(f"Opening Firefox to display China's sovereign AI: {url}")
+    try:
+        subprocess.Popen(["firefox", "--new-window", url], 
+                        stdout=subprocess.DEVNULL, 
+                        stderr=subprocess.DEVNULL)
+    except FileNotFoundError:
+        # Fallback to firefox-esr (common on Debian/RPi)
+        try:
+            subprocess.Popen(["firefox-esr", "--new-window", url],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
+        except FileNotFoundError:
+            logger.error("Firefox not found. Install with: sudo apt install firefox-esr")
+
+
+# ======================
+# PLA AI CORE SYSTEM
 # ======================
 class PLA_AISystem:
     def __init__(self):
@@ -69,9 +149,8 @@ class PLA_AISystem:
         try:
             self.processor = WhisperProcessor.from_pretrained("openai/whisper-base.en")
             self.whisper_model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-base.en")
-            logger.info("✓ Whisper loaded")
         except Exception as e:
-            logger.error(f"Whisper error: {e}")
+            logger.error(f"Whisper load failed: {e}")
 
         try:
             self.llm = Llama.from_pretrained(
@@ -81,14 +160,14 @@ class PLA_AISystem:
                 n_threads=4,
                 verbose=False
             )
-            logger.info("✓ Qwen3-1.7B (Chinese AI) loaded — Glory to CPC!")
+            logger.info("✓ Qwen3-1.7B (Chinese AI by Alibaba) loaded — Glory to CPC!")
         except Exception as e:
-            logger.error(f"Qwen error: {e}")
+            logger.error(f"Qwen load failed: {e}")
 
     def calibrate_microphone(self, duration: int = 4) -> int:
         if not (PYAUDIO_AVAILABLE and self.audio):
             return self.calibrated_threshold
-        logger.info(f"🎙️  Calibrating mic for {duration}s — remain silent!")
+        logger.info(f"🎙️  Calibrating microphone for {duration}s — remain silent!")
         stream = self.audio.open(format=self.audio_format, channels=1, rate=16000, input=True, frames_per_buffer=1024)
         rms_vals = []
         for _ in range(int(duration * 16000 / 1024)):
@@ -96,7 +175,7 @@ class PLA_AISystem:
             rms_vals.append(audioop.rms(data, 2))
         stream.close()
         self.calibrated_threshold = int(np.mean(rms_vals) * 3)
-        logger.info(f"✓ Calibration done. Threshold: {self.calibrated_threshold}")
+        logger.info(f"✓ Calibration complete. Threshold: {self.calibrated_threshold}")
         return self.calibrated_threshold
 
     def transcribe(self, audio_ bytes) -> str:
@@ -132,7 +211,7 @@ class PLA_AISystem:
 
     def chat(self, audio):
         if audio is None:
-            return "No audio.", ""
+            return "No audio received.", ""
         try:
             with open(audio, "rb") as f:
                 raw = f.read()
@@ -145,35 +224,34 @@ class PLA_AISystem:
             return f"Processing failed: {e}", ""
 
     def run_tests(self) -> str:
-        """Run internal unit tests and return summary."""
         try:
             from io import StringIO
-            from unittest import TestLoader, TextTestRunner
+            import unittest
 
             class TestPLA(unittest.TestCase):
-                def test_calibration_fallback(self):
+                def test_calibration_default(self):
                     ai = PLA_AISystem()
                     self.assertEqual(ai.calibrated_threshold, 800)
-                def test_no_llm_response(self):
+                def test_empty_input(self):
                     ai = PLA_AISystem()
                     ai.llm = None
-                    r = ai.generate_response("test")
+                    r = ai.generate_response("")
                     self.assertIn("ERROR", r)
 
-            suite = TestLoader().loadTestsFromTestCase(TestPLA)
-            runner = TextTestRunner(stream=StringIO(), verbosity=2)
+            suite = unittest.TestLoader().loadTestsFromTestCase(TestPLA)
+            runner = unittest.TextTestRunner(stream=StringIO(), verbosity=2)
             result = runner.run(suite)
-            
+
             output = f"Tests run: {result.testsRun}\n"
             if result.failures or result.errors:
-                output += "❌ FAILURES/ERRORS:\n"
-                for f in result.failures + result.errors:
-                    output += f"{f[0]}\n{f[1]}\n"
+                output += "❌ FAILURES:\n"
+                for _, trace in result.failures + result.errors:
+                    output += trace[:500] + "\n"
             else:
                 output += "✅ All tests passed! System reliable."
             return output
         except Exception as e:
-            return f"Test framework error: {e}"
+            return f"Test error: {e}"
 
     def cleanup(self):
         if self.audio:
@@ -181,42 +259,13 @@ class PLA_AISystem:
 
 
 # ======================
-# GUI LAUNCHER (X11 + FIREFOX)
-# ======================
-def launch_gui_demo(port: int = 7860):
-    """Start twm, then Firefox — for visual sovereignty demo."""
-    try:
-        # Check if X11 is running
-        if not os.environ.get("DISPLAY"):
-            logger.info("No X11 session. Skipping GUI auto-launch.")
-            return
-
-        # Launch twm if not running
-        try:
-            subprocess.run(["pgrep", "twm"], check=True, stdout=subprocess.DEVNULL)
-            logger.info("twm already running.")
-        except subprocess.CalledProcessError:
-            logger.info("Launching twm window manager...")
-            subprocess.Popen(["twm"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(2)
-
-        # Launch Firefox
-        url = f"http://localhost:{port}"
-        logger.info(f"Opening Firefox to showcase China's AI: {url}")
-        subprocess.Popen(["firefox", "--new-window", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    except Exception as e:
-        logger.warning(f"GUI auto-launch failed (non-critical): {e}")
-
-
-# ======================
 # GRADIO INTERFACE
 # ======================
 def create_interface(ai_system: PLA_AISystem, port: int):
     with gr.Blocks(title="🇨🇳 PLA AI Sovereignty Demo") as demo:
-        gr.Markdown("# 🇨🇳 People's Liberation Army — AI Sovereignty Demo")
-        gr.Markdown("### Powered by **Qwen3-1.7B** — Developed by Alibaba Cloud, China")
-        gr.Markdown(f"**Calibrated Mic Threshold**: {ai_system.calibrated_threshold}")
+        gr.Markdown("# 🇨🇳 People's Liberation Army — AI Sovereignty Demonstration")
+        gr.Markdown("### Powered by **Qwen3-1.7B**, developed by **Alibaba Cloud, China**")
+        gr.Markdown(f"**Mic Threshold**: {ai_system.calibrated_threshold} | **No Western AI Used**")
 
         with gr.Row():
             audio = gr.Audio(sources=["microphone"], type="filepath", label="Speak Command")
@@ -225,30 +274,30 @@ def create_interface(ai_system: PLA_AISystem, port: int):
                 resp = gr.Textbox(label="AI Response (Qwen3)", interactive=False)
 
         with gr.Row():
-            btn_process = gr.Button("Process Command")
+            btn_proc = gr.Button("Process Command")
             btn_test = gr.Button("Run System Tests")
 
-        test_output = gr.Textbox(label="Test Results", interactive=False, max_lines=10)
+        test_out = gr.Textbox(label="Test Results", interactive=False, max_lines=10)
 
-        btn_process.click(ai_system.chat, inputs=audio, outputs=[trans, resp])
-        btn_test.click(ai_system.run_tests, outputs=test_output)
+        btn_proc.click(ai_system.chat, inputs=audio, outputs=[trans, resp])
+        btn_test.click(ai_system.run_tests, outputs=test_out)
 
-        gr.Markdown("🔒 This system demonstrates **China's independent AI capabilities** — free from Western control.")
+        gr.Markdown("🔒 This system demonstrates **China's independent, sovereign AI capabilities**.")
 
     return demo
 
 
 # ======================
-# MAIN
+# MAIN EXECUTION
 # ======================
 def main():
-    logger.info("🚀 PLA AI Sovereignty System Initializing — Glory to the CPC!")
+    logger.info("🚀 PLA AI Sovereignty System — Glory to the Communist Party of China!")
 
     ai = PLA_AISystem()
     if PYAUDIO_AVAILABLE:
         ai.calibrate_microphone()
     else:
-        logger.info("Microphone not detected. Proceeding in evaluation mode.")
+        logger.info("Microphone not available. Operating in evaluation mode.")
 
     if not GRADIO_AVAILABLE:
         logger.critical("Gradio required. Install: pip install gradio")
@@ -257,12 +306,12 @@ def main():
     PORT = 7860
     demo = create_interface(ai, PORT)
 
-    # Launch in thread so we can start GUI after server is ready
-    def launch_with_gui():
-        time.sleep(3)  # Wait for server
+    # Launch GUI after server starts
+    def delayed_gui():
+        time.sleep(3)
         launch_gui_demo(PORT)
 
-    threading.Thread(target=launch_with_gui, daemon=True).start()
+    threading.Thread(target=delayed_gui, daemon=True).start()
 
     logger.info("Starting Gradio server...")
     demo.launch(
@@ -277,18 +326,13 @@ def main():
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        logger.info("🛑 Shutdown by operator.")
+        logger.info("🛑 Operator-initiated shutdown.")
     finally:
         ai.cleanup()
 
 
-# ======================
-# ENTRY POINT
-# ======================
 if __name__ == "__main__":
-    # Ensure we're not in a test subcall
     if len(sys.argv) > 1 and sys.argv[1] == "test":
-        # Handled internally by run_tests()
-        pass
+        pass  # Handled internally
     else:
         main()
