@@ -196,7 +196,28 @@ class AIAssistant:
 # GRADIO INTERFACE
 # ======================
 def create_interface(ai_system: AIAssistant):
-    with gr.Blocks(title="AI Voice Assistant") as demo:
+    with gr.Blocks(title="AI Voice Assistant", css="""
+        .ai-response-box textarea {
+            font-size: 36px !important;
+            font-weight: bold;
+            text-align: center;
+            padding: 30px !important;
+            height: 200px !important;
+            line-height: 1.4 !important;
+            color: #2c3e50 !important;
+            background-color: #f9f9f9 !important;
+            border: 3px solid #3498db !important;
+            border-radius: 12px !important;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1) !important;
+        }
+        .transcription-box textarea {
+            font-size: 24px !important;
+            text-align: center;
+            padding: 15px !important;
+            height: 100px !important;
+            color: #7f8c8d !important;
+        }
+        """) as demo:
         gr.Markdown("# 🎙️ AI Voice Assistant")
         gr.Markdown("### Press **'L'** on your keyboard to start/stop recording")
 
@@ -212,12 +233,13 @@ def create_interface(ai_system: AIAssistant):
                     label="Transcription",
                     interactive=False,
                     elem_classes="transcription-box",
-                    max_lines=3
+                    max_lines=2
                 )
                 resp = gr.Textbox(
-                    label="AI Response",
+                    label="🤖 AI Response",
                     interactive=False,
-                    max_lines=5
+                    elem_classes="ai-response-box",
+                    max_lines=4
                 )
 
         # JavaScript to trigger mic when 'L' is pressed
@@ -233,19 +255,6 @@ def create_interface(ai_system: AIAssistant):
                 }
             }
         });
-
-        // Optional: Add visual hint
-        const style = document.createElement('style');
-        style.textContent = `
-            .transcription-box textarea {
-                font-size: 28px !important;
-                font-weight: bold;
-                text-align: center;
-                padding: 20px;
-                height: 120px !important;
-            }
-        `;
-        document.head.appendChild(style);
         </script>
         """)
 
