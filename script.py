@@ -113,24 +113,40 @@ class AIAssistant:
         except Exception as e:
             logger.error(f"Qwen load failed: {e}")
 
-    def transcribe(self, audio_path: str) -> str:
+        def transcribe(self, audio_path: str) -> str:
         if not (self.processor and self.whisper_model):
             return "ERROR: AI models not ready."
+
         try:
             import scipy.io.wavfile as wavfile
-            sample_rate, audio_array = wavfile.read(audio_path)
+            from scipy.signal import resample_poly
 
+            # Read audio (could be 44100, 48000, etc.)
+            orig_sr, audio_array = wavfile.read(audio_path)
+
+            # Convert to float32 if needed
             if audio_array.dtype == np.int16:
                 audio_array = audio_array.astype(np.float32) / 32768.0
+            elif audio_array.dtype == np.int32:
+                audio_array = audio_array.astype(np.float32) / 2147483648.0
             elif audio_array.dtype != np.float32:
                 audio_array = audio_array.astype(np.float32)
 
+            # Handle stereo → mono
             if audio_array.ndim > 1:
-                audio_array = audio_array[:, 0]
+                audio_array = np.mean(audio_array, axis=1)  # or use audio_array[:, 0]
 
+            target_sr = 16000
+
+            # Resample if necessary
+            if orig_sr != target_sr:
+                # Use resample_poly for high-quality resampling
+                audio_array = resample_poly(audio_array, target_sr, orig_sr)
+
+            # Now process with Whisper
             inputs = self.processor(
                 audio_array,
-                sampling_rate=sample_rate,
+                sampling_rate=target_sr,
                 return_tensors="pt"
             )
 
