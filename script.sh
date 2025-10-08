@@ -131,15 +131,16 @@ check_requirements() {
     if [ ! -f "$REQUIREMENTS_FILE" ]; then
         print_status "Creating requirements.txt..."
         cat > "$REQUIREMENTS_FILE" << 'EOF'
-torch>=2.0.0
-transformers>=4.35.0
-pyaudio>=0.2.11
-numpy>=1.21.0
-scipy>=1.7.0
-llama-cpp-python>=0.2.0
-sentencepiece>=0.1.99
-protobuf>=3.20.0
-soundfile>=0.12.0
+torch
+transformers
+pyaudio
+numpy
+scipy
+llama-cpp-python
+sentencepiece
+protobuf
+soundfile
+gradio
 EOF
     fi
 }
