@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-AI Voice Assistant — Auto-Recording Demo
-- Records continuously in background
-- Every 10 seconds: transcribes latest 10s of audio
-- No user interaction needed
-- Real-time word-by-word display
+AI Voice Assistant — Press 'L' to Record
+- Whisper (OpenAI) for speech-to-text
+- Qwen3 (Alibaba) for responses
+- Press 'L' on keyboard to start/stop recording
+- Large transcription display
 """
 
 import os
@@ -17,7 +17,6 @@ import logging
 import tempfile
 import wave
 import numpy as np
-from collections import deque
 from typing import Optional, List, Dict, Any
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | AI Assistant | %(message)s')
@@ -27,15 +26,9 @@ logger = logging.getLogger()
 # OPTIONAL DEPENDENCIES
 # ======================
 try:
-    import pyaudio
-    PYAUDIO_AVAILABLE = True
-except ImportError:
-    PYAUDIO_AVAILABLE = False
-
-try:
+    AI_MODELS_AVAILABLE = True
     from transformers import WhisperProcessor, WhisperForConditionalGeneration
     from llama_cpp import Llama
-    AI_MODELS_AVAILABLE = True
 except ImportError:
     AI_MODELS_AVAILABLE = False
 
@@ -47,7 +40,7 @@ except ImportError:
 
 
 # ======================
-# DESKTOP ENVIRONMENT DETECTION
+# DESKTOP ENVIRONMENT DETECTION (optional)
 # ======================
 def is_desktop_environment_active() -> bool:
     desktop_session = os.environ.get("DESKTOP_SESSION", "").lower()
@@ -88,73 +81,15 @@ def launch_gui_demo(port: int = 7860):
 
 
 # ======================
-# CONTINUOUS AUDIO RECORDER
-# ======================
-class ContinuousRecorder:
-    def __init__(self, sample_rate=16000, chunk_duration=10):
-        self.sample_rate = sample_rate
-        self.chunk_samples = sample_rate * chunk_duration  # 10 seconds
-        self.audio_buffer = deque(maxlen=self.chunk_samples)
-        self.is_recording = False
-        self.lock = threading.Lock()
-
-    def start(self):
-        if not PYAUDIO_AVAILABLE:
-            logger.warning("PyAudio not available. Cannot record audio.")
-            return
-        self.is_recording = True
-        self.thread = threading.Thread(target=self._record_loop, daemon=True)
-        self.thread.start()
-        logger.info("🎙️ Continuous audio recording started.")
-
-    def _record_loop(self):
-        p = pyaudio.PyAudio()
-        stream = p.open(
-            format=pyaudio.paInt16,
-            channels=1,
-            rate=self.sample_rate,
-            input=True,
-            frames_per_buffer=1024
-        )
-        while self.is_recording:
-            try:
-                data = stream.read(1024, exception_on_overflow=False)
-                # Convert to numpy int16
-                audio_chunk = np.frombuffer(data, dtype=np.int16)
-                with self.lock:
-                    self.audio_buffer.extend(audio_chunk)
-            except Exception as e:
-                logger.error(f"Recording error: {e}")
-                break
-        stream.stop_stream()
-        stream.close()
-        p.terminate()
-
-    def get_last_chunk(self):
-        with self.lock:
-            if len(self.audio_buffer) == 0:
-                return None
-            # Return up to last `chunk_samples` samples
-            audio_array = np.array(list(self.audio_buffer)[-self.chunk_samples:], dtype=np.int16)
-            return audio_array
-
-    def stop(self):
-        self.is_recording = False
-
-
-# ======================
 # AI ASSISTANT CORE
 # ======================
 class AIAssistant:
     def __init__(self):
-        self.sample_rate = 16000
         self.processor = None
         self.whisper_model = None
         self.llm = None
         self.conversation: List[Dict[str, str]] = []
-        self.recorder = ContinuousRecorder(sample_rate=16000, chunk_duration=10)
         self._load_models()
-        self.recorder.start()
 
     def _load_models(self):
         if not AI_MODELS_AVAILABLE:
@@ -178,19 +113,24 @@ class AIAssistant:
         except Exception as e:
             logger.error(f"Qwen load failed: {e}")
 
-    def transcribe_from_array(self, audio_array: np.ndarray) -> str:
+    def transcribe(self, audio_path: str) -> str:
         if not (self.processor and self.whisper_model):
             return "ERROR: AI models not ready."
-        if audio_array.size == 0:
-            return ""
-
         try:
-            # Normalize to float32
-            audio_float = audio_array.astype(np.float32) / 32768.0
+            import scipy.io.wavfile as wavfile
+            sample_rate, audio_array = wavfile.read(audio_path)
+
+            if audio_array.dtype == np.int16:
+                audio_array = audio_array.astype(np.float32) / 32768.0
+            elif audio_array.dtype != np.float32:
+                audio_array = audio_array.astype(np.float32)
+
+            if audio_array.ndim > 1:
+                audio_array = audio_array[:, 0]
 
             inputs = self.processor(
-                audio_float,
-                sampling_rate=self.sample_rate,
+                audio_array,
+                sampling_rate=sample_rate,
                 return_tensors="pt"
             )
 
@@ -223,97 +163,92 @@ class AIAssistant:
         except Exception as e:
             return f"Response error: {e}"
 
-    def auto_infer(self):
-        """Called every 10 seconds by Gradio Timer"""
-        audio_array = self.recorder.get_last_chunk()
-        if audio_array is None or len(audio_array) < 1000:  # too short
-            return "", ""
-
-        transcription = self.transcribe_from_array(audio_array)
-        if not transcription or "ERROR" in transcription:
-            return transcription, ""
-
-        # Simulate word-by-word for transcription
-        words = transcription.split()
-        partial = ""
-        for word in words:
-            partial += word + " "
-            yield partial.strip(), ""  # Only show transcription building
-            time.sleep(0.12)
-
-        # Then show full response
-        response = self.generate_response(transcription)
-        yield transcription, response
-
-    def cleanup(self):
-        self.recorder.stop()
+    def chat(self, audio_path):
+        if audio_path is None:
+            return "No audio received.", ""
+        try:
+            transcription = self.transcribe(audio_path)
+            if "ERROR" in transcription:
+                return transcription, ""
+            response = self.generate_response(transcription)
+            return transcription, response
+        except Exception as e:
+            return f"Processing failed: {e}", ""
 
 
 # ======================
 # GRADIO INTERFACE
 # ======================
 def create_interface(ai_system: AIAssistant):
-    with gr.Blocks(title="AI Voice Assistant - Auto Mode") as demo:
-        gr.Markdown("# 🎙️ AI Voice Assistant (Auto-Listening)")
-        gr.Markdown("### Records continuously. Processes every 10 seconds. No clicks needed.")
+    with gr.Blocks(title="AI Voice Assistant") as demo:
+        gr.Markdown("# 🎙️ AI Voice Assistant")
+        gr.Markdown("### Press **'L'** on your keyboard to start/stop recording")
 
         with gr.Row():
-            trans = gr.Textbox(
-                label="Transcription (Last 10s)",
-                interactive=False,
-                elem_classes="transcription-box",
-                max_lines=3
+            audio = gr.Audio(
+                sources=["microphone"],
+                type="filepath",
+                label="🎤 Microphone (press 'L' to toggle)",
+                elem_id="mic_input"
             )
-            resp = gr.Textbox(
-                label="AI Response",
-                interactive=False,
-                max_lines=5
-            )
+            with gr.Column():
+                trans = gr.Textbox(
+                    label="Transcription",
+                    interactive=False,
+                    elem_classes="transcription-box",
+                    max_lines=3
+                )
+                resp = gr.Textbox(
+                    label="AI Response",
+                    interactive=False,
+                    max_lines=5
+                )
 
-        # Create a hidden button to trigger the generator
-        hidden_btn = gr.Button(visible=False)
+        # JavaScript to trigger mic when 'L' is pressed
+        gr.HTML("""
+        <script>
+        document.addEventListener('keydown', function(event) {
+            if (event.key.toLowerCase() === 'l') {
+                event.preventDefault();
+                const micBtn = document.querySelector('#mic_input button[aria-label="Record"]');
+                if (micBtn) {
+                    micBtn.click();
+                    console.log("🎙️ 'L' pressed — toggling microphone");
+                }
+            }
+        });
 
-        # Timer that clicks the hidden button every 10 seconds
-        timer = gr.Timer(10)
-        timer.tick(fn=lambda: None, inputs=None, outputs=None, every=1)  # dummy tick to start timer
+        // Optional: Add visual hint
+        const style = document.createElement('style');
+        style.textContent = `
+            .transcription-box textarea {
+                font-size: 28px !important;
+                font-weight: bold;
+                text-align: center;
+                padding: 20px;
+                height: 120px !important;
+            }
+        `;
+        document.head.appendChild(style);
+        </script>
+        """)
 
-        # Connect hidden button to the inference generator
-        def run_inference():
-            yield from ai_system.auto_infer()
-
-        hidden_btn.click(
-            fn=run_inference,
-            inputs=None,
+        # Trigger on stop recording
+        audio.stop_recording(
+            fn=ai_system.chat,
+            inputs=audio,
             outputs=[trans, resp],
             show_progress="minimal"
         )
 
-        # Start the timer automatically when the page loads
-        demo.load(
-            fn=lambda: gr.Timer(active=True),
-            inputs=None,
-            outputs=timer
-        )
-
-        gr.HTML("""
-        <style>
-        .transcription-box textarea {
-            font-size: 28px !important;
-            font-weight: bold;
-            text-align: center;
-            padding: 20px;
-            height: 120px !important;
-        }
-        </style>
-        """)
-
     return demo
+
 
 # ======================
 # MAIN
 # ======================
 def main():
-    logger.info("🚀 Starting Auto-Listening AI Assistant...")
+    logger.info("🚀 Starting AI Voice Assistant...")
 
     ai = AIAssistant()
 
@@ -325,12 +260,12 @@ def main():
     demo = create_interface(ai)
 
     def delayed_gui():
-        time.sleep(3)
+        time.sleep(2)
         launch_gui_demo(PORT)
 
     threading.Thread(target=delayed_gui, daemon=True).start()
 
-    logger.info("Starting Gradio server...")
+    logger.info("Open http://localhost:7860 — then press 'L' to record!")
     demo.launch(
         server_name="0.0.0.0",
         server_port=PORT,
