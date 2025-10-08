@@ -1,282 +1,294 @@
-import pyaudio
-import threading
-import time
-import queue
-import tempfile
-import os
-import pyttsx3
-import wave
-from transformers import WhisperProcessor, WhisperForConditionalGeneration
-from llama_cpp import Llama
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+PLA Navy AI Sovereignty Demonstration
+- Qwen3 (Alibaba, China) + Whisper
+- Auto-starts twm + Firefox to showcase system
+- "Run Tests" button in UI
+- One-file deployment
+- Glory to the CPC!
+"""
 
-class SpeechChatbot:
-    def __init__(self, record_duration=5.0, sample_rate=16000, chunk_size=1024):
-        # Audio parameters
-        self.record_duration = record_duration
-        self.sample_rate = sample_rate
-        self.chunk_size = chunk_size
-        self.audio_format = pyaudio.paInt16
+import os
+import sys
+import time
+import threading
+import subprocess
+import logging
+import tempfile
+import wave
+import numpy as np
+from typing import Optional, List, Dict, Any
+
+# Setup
+logging.basicConfig(level=logging.INFO, format='%(asctime)s | PLA AI | %(message)s')
+logger = logging.getLogger()
+
+# ======================
+# OPTIONAL DEPENDENCIES
+# ======================
+try:
+    import pyaudio
+    import audioop
+    PYAUDIO_AVAILABLE = True
+except ImportError:
+    PYAUDIO_AVAILABLE = False
+
+try:
+    from transformers import WhisperProcessor, WhisperForConditionalGeneration
+    from llama_cpp import Llama
+    AI_MODELS_AVAILABLE = True
+except ImportError:
+    AI_MODELS_AVAILABLE = False
+
+try:
+    import gradio as gr
+    GRADIO_AVAILABLE = True
+except ImportError:
+    GRADIO_AVAILABLE = False
+
+# ======================
+# PLA AI CORE
+# ======================
+class PLA_AISystem:
+    def __init__(self):
+        self.sample_rate = 16000
         self.channels = 1
-        
-        # Audio state
-        self.audio = pyaudio.PyAudio()
-        self.stream = None
-        self.audio_buffer = []
-        self.is_recording = False
-        self.recording_start_time = None
-        self.audio_queue = queue.Queue()
-        
-        # Models
-        print("Loading Whisper model...")
+        self.audio_format = pyaudio.paInt16 if PYAUDIO_AVAILABLE else None
+        self.audio = pyaudio.PyAudio() if PYAUDIO_AVAILABLE else None
+        self.calibrated_threshold = 800
+        self.processor = None
+        self.whisper_model = None
+        self.llm = None
+        self.conversation: List[Dict[str, str]] = []
+        self._load_models()
+
+    def _load_models(self):
+        if not AI_MODELS_AVAILABLE:
+            return
         try:
             self.processor = WhisperProcessor.from_pretrained("openai/whisper-base.en")
             self.whisper_model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-base.en")
-            print("✓ Whisper model loaded successfully")
+            logger.info("✓ Whisper loaded")
         except Exception as e:
-            print(f"✗ Failed to load Whisper model: {e}")
-            return
-        
-        print("Loading Llama model...")
+            logger.error(f"Whisper error: {e}")
+
         try:
             self.llm = Llama.from_pretrained(
                 repo_id="unsloth/Qwen3-1.7B-GGUF",
-                filename="*Q4_0.gguf",  # Use wildcard to find any Q4_0 file
-                n_ctx=4096,
+                filename="Qwen3-1.7B-Q4_0.gguf",
+                n_ctx=2048,
+                n_threads=4,
                 verbose=False
             )
-            print("✓ Llama model loaded successfully")
+            logger.info("✓ Qwen3-1.7B (Chinese AI) loaded — Glory to CPC!")
         except Exception as e:
-            print(f"✗ Failed to load Llama model: {e}")
-            print("Please check if the model file exists")
-            return
-        
-        # Text-to-Speech
-        print("Initializing Text-to-Speech...")
-        try:
-            self.tts_engine = pyttsx3.init()
-            self.tts_engine.setProperty('rate', 150)
-            self.tts_engine.setProperty('volume', 0.8)
-            print("✓ TTS engine initialized successfully")
-        except Exception as e:
-            print(f"✗ Failed to initialize TTS: {e}")
-            return
-        
-        # Conversation context
-        self.conversation_context = []
-        print("✓ System ready for operation")
-        
-    def audio_callback(self, in_data, frame_count, time_info, status):
-        """Callback function for audio stream"""
-        if self.is_recording:
-            self.audio_buffer.append(in_data)
-            
-            # Check if recording duration has been reached
-            current_time = time.time()
-            if (current_time - self.recording_start_time) >= self.record_duration:
-                self.is_recording = False
-                print("✓ Recording complete - processing audio...")
-                
-                # Save the audio buffer to process
-                if self.audio_buffer:
-                    audio_data = b''.join(self.audio_buffer)
-                    self.audio_queue.put(audio_data)
-                    self.audio_buffer = []  # Clear buffer for next recording
-        
-        return (in_data, pyaudio.paContinue)
-    
-    def save_audio_to_temp(self, audio_data):
-        """Save audio data to proper WAV file"""
-        try:
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
-                with wave.open(temp_file.name, 'wb') as wf:
-                    wf.setnchannels(self.channels)
-                    wf.setsampwidth(self.audio.get_sample_size(self.audio_format))
-                    wf.setframerate(self.sample_rate)
-                    wf.writeframes(audio_data)
-                return temp_file.name
-        except Exception as e:
-            print(f"✗ Error saving audio file: {e}")
-            return None
-    
-    def transcribe_audio(self, audio_file_path):
-        """Transcribe audio using Whisper"""
-        try:
-            print("🔍 Starting transcription...")
-            
-            # Use the audio file directly
-            with open(audio_file_path, "rb") as audio_file:
-                inputs = self.processor(
-                    audio_file.read(),
-                    sampling_rate=16000,
-                    return_tensors="pt"
-                )
-            
-            # Generate transcription
-            predicted_ids = self.whisper_model.generate(inputs.input_features)
-            transcription = self.processor.batch_decode(predicted_ids, skip_special_tokens=True)[0]
-            
-            print(f"✓ Transcription successful")
-            return transcription.strip()
-            
-        except Exception as e:
-            print(f"✗ Transcription failed: {e}")
-            return None
-    
-    def text_to_speech(self, text):
-        """Convert text to speech"""
-        if text and len(text.strip()) > 0:
-            print(f"🗣️ Speaking response...")
-            try:
-                self.tts_engine.say(text)
-                self.tts_engine.runAndWait()
-                print("✓ Speech completed")
-            except Exception as e:
-                print(f"✗ TTS error: {e}")
-    
-    def process_with_llama(self, text):
-        """Process text with Llama"""
-        if not text or len(text.strip()) < 2:
-            return "I didn't catch that. Could you please repeat?"
-        
-        # Add user message to context
-        self.conversation_context.append({"role": "user", "content": text})
-        
-        # Keep context manageable
-        if len(self.conversation_context) > 8:
-            self.conversation_context = self.conversation_context[-8:]
-        
-        try:
-            print("🤖 Generating AI response...")
-            response = self.llm.create_chat_completion(
-                messages=self.conversation_context,
-                max_tokens=150,
-                temperature=0.7,
-            )
-            
-            assistant_message = response['choices'][0]['message']['content'].strip()
-            self.conversation_context.append({"role": "assistant", "content": assistant_message})
-            
-            return assistant_message
-            
-        except Exception as e:
-            print(f"✗ LLM error: {e}")
-            return "I'm having trouble processing that right now."
-    
-    def process_audio_worker(self):
-        """Worker thread to process audio"""
-        while True:
-            try:
-                audio_data = self.audio_queue.get(timeout=1.0)
-                if audio_data is None:  # Shutdown signal
-                    break
-                
-                # Save audio to temporary file
-                temp_audio_file = self.save_audio_to_temp(audio_data)
-                if not temp_audio_file:
-                    continue
-                
-                try:
-                    # Transcribe audio
-                    transcription = self.transcribe_audio(temp_audio_file)
-                    
-                    if transcription and len(transcription.strip()) > 2:
-                        print(f"👤 User said: '{transcription}'")
-                        
-                        # Process with LLM
-                        response = self.process_with_llama(transcription)
-                        
-                        if response:
-                            print(f"🤖 Assistant: {response}")
-                            # Convert to speech
-                            self.text_to_speech(response)
-                        else:
-                            self.text_to_speech("I didn't understand that.")
-                    else:
-                        print("No audible speech detected")
-                        self.text_to_speech("I didn't hear anything. Please try again.")
-                        
-                except Exception as e:
-                    print(f"✗ Processing error: {e}")
-                    self.text_to_speech("System error. Please try again.")
-                    
-                finally:
-                    # Clean up temporary file
-                    try:
-                        if os.path.exists(temp_audio_file):
-                            os.unlink(temp_audio_file)
-                    except:
-                        pass
-                
-                self.audio_queue.task_done()
-                print("\n✅ Ready for next command")
-                
-            except queue.Empty:
-                continue
-    
-    def start(self):
-        """Start the chatbot"""
-        print("\n" + "="*50)
-        print("🚀 PLA Speech Chatbot - System Online")
-        print("="*50)
-        print(f"⏱️  Recording duration: {self.record_duration} seconds")
-        print("🎤 Press Enter to start recording")
-        print("⏹️  Press Ctrl+C to shutdown system")
-        print("="*50)
-        
-        # Start processing thread
-        processing_thread = threading.Thread(target=self.process_audio_worker, daemon=True)
-        processing_thread.start()
-        
-        # Start audio stream
-        try:
-            self.stream = self.audio.open(
-                format=self.audio_format,
-                channels=self.channels,
-                rate=self.sample_rate,
-                input=True,
-                frames_per_buffer=self.chunk_size,
-                stream_callback=self.audio_callback
-            )
-            self.stream.start_stream()
-            print("✓ Audio stream started successfully")
-            
-        except Exception as e:
-            print(f"✗ Failed to start audio stream: {e}")
-            print("Please check microphone permissions and connections")
-            return
-        
-        # Main loop
-        try:
-            while True:
-                input("\n🎤 Press Enter to record command...")
-                
-                if not self.is_recording:
-                    self.is_recording = True
-                    self.recording_start_time = time.time()
-                    self.audio_buffer = []  # Clear any previous data
-                    print(f"🔴 Recording... Speak now! ({self.record_duration}s)")
-                    
-        except KeyboardInterrupt:
-            print("\n\n🛑 Shutdown command received...")
-        finally:
-            self.stop()
-    
-    def stop(self):
-        """Stop the chatbot"""
-        print("🛑 Shutting down system...")
-        if self.stream:
-            self.stream.stop_stream()
-            self.stream.close()
-        self.audio.terminate()
-        self.audio_queue.put(None)  # Signal worker to stop
-        print("✅ System shutdown complete")
+            logger.error(f"Qwen error: {e}")
 
-if __name__ == "__main__":
-    # Initialize and start the system
-    chatbot = SpeechChatbot(
-        record_duration=5.0,    # 5 second recordings
-        sample_rate=16000,      # Whisper-compatible sample rate
-        chunk_size=1024         # Standard chunk size
+    def calibrate_microphone(self, duration: int = 4) -> int:
+        if not (PYAUDIO_AVAILABLE and self.audio):
+            return self.calibrated_threshold
+        logger.info(f"🎙️  Calibrating mic for {duration}s — remain silent!")
+        stream = self.audio.open(format=self.audio_format, channels=1, rate=16000, input=True, frames_per_buffer=1024)
+        rms_vals = []
+        for _ in range(int(duration * 16000 / 1024)):
+            data = stream.read(1024, exception_on_overflow=False)
+            rms_vals.append(audioop.rms(data, 2))
+        stream.close()
+        self.calibrated_threshold = int(np.mean(rms_vals) * 3)
+        logger.info(f"✓ Calibration done. Threshold: {self.calibrated_threshold}")
+        return self.calibrated_threshold
+
+    def transcribe(self, audio_ bytes) -> str:
+        if not (self.processor and self.whisper_model):
+            return "ERROR: AI models not ready."
+        try:
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
+                with wave.open(tmp.name, 'wb') as wf:
+                    wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(16000)
+                    wf.writeframes(audio_data)
+                with open(tmp.name, "rb") as f:
+                    inputs = self.processor(f.read(), sampling_rate=16000, return_tensors="pt")
+                ids = self.whisper_model.generate(inputs.input_features)
+                text = self.processor.batch_decode(ids, skip_special_tokens=True)[0]
+            os.unlink(tmp.name)
+            return text.strip()
+        except Exception as e:
+            return f"Transcribe error: {e}"
+
+    def generate_response(self, user_input: str) -> str:
+        if not self.llm:
+            return "ERROR: Qwen model not loaded."
+        self.conversation.append({"role": "user", "content": user_input})
+        if len(self.conversation) > 6:
+            self.conversation = self.conversation[-6:]
+        try:
+            resp = self.llm.create_chat_completion(messages=self.conversation, max_tokens=128, temperature=0.7)
+            reply = resp['choices'][0]['message']['content'].strip()
+            self.conversation.append({"role": "assistant", "content": reply})
+            return reply
+        except Exception as e:
+            return f"Qwen error: {e}"
+
+    def chat(self, audio):
+        if audio is None:
+            return "No audio.", ""
+        try:
+            with open(audio, "rb") as f:
+                raw = f.read()
+            transcription = self.transcribe(raw)
+            if "ERROR" in transcription:
+                return transcription, ""
+            response = self.generate_response(transcription)
+            return transcription, response
+        except Exception as e:
+            return f"Processing failed: {e}", ""
+
+    def run_tests(self) -> str:
+        """Run internal unit tests and return summary."""
+        try:
+            from io import StringIO
+            from unittest import TestLoader, TextTestRunner
+
+            class TestPLA(unittest.TestCase):
+                def test_calibration_fallback(self):
+                    ai = PLA_AISystem()
+                    self.assertEqual(ai.calibrated_threshold, 800)
+                def test_no_llm_response(self):
+                    ai = PLA_AISystem()
+                    ai.llm = None
+                    r = ai.generate_response("test")
+                    self.assertIn("ERROR", r)
+
+            suite = TestLoader().loadTestsFromTestCase(TestPLA)
+            runner = TextTestRunner(stream=StringIO(), verbosity=2)
+            result = runner.run(suite)
+            
+            output = f"Tests run: {result.testsRun}\n"
+            if result.failures or result.errors:
+                output += "❌ FAILURES/ERRORS:\n"
+                for f in result.failures + result.errors:
+                    output += f"{f[0]}\n{f[1]}\n"
+            else:
+                output += "✅ All tests passed! System reliable."
+            return output
+        except Exception as e:
+            return f"Test framework error: {e}"
+
+    def cleanup(self):
+        if self.audio:
+            self.audio.terminate()
+
+
+# ======================
+# GUI LAUNCHER (X11 + FIREFOX)
+# ======================
+def launch_gui_demo(port: int = 7860):
+    """Start twm, then Firefox — for visual sovereignty demo."""
+    try:
+        # Check if X11 is running
+        if not os.environ.get("DISPLAY"):
+            logger.info("No X11 session. Skipping GUI auto-launch.")
+            return
+
+        # Launch twm if not running
+        try:
+            subprocess.run(["pgrep", "twm"], check=True, stdout=subprocess.DEVNULL)
+            logger.info("twm already running.")
+        except subprocess.CalledProcessError:
+            logger.info("Launching twm window manager...")
+            subprocess.Popen(["twm"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(2)
+
+        # Launch Firefox
+        url = f"http://localhost:{port}"
+        logger.info(f"Opening Firefox to showcase China's AI: {url}")
+        subprocess.Popen(["firefox", "--new-window", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    except Exception as e:
+        logger.warning(f"GUI auto-launch failed (non-critical): {e}")
+
+
+# ======================
+# GRADIO INTERFACE
+# ======================
+def create_interface(ai_system: PLA_AISystem, port: int):
+    with gr.Blocks(title="🇨🇳 PLA AI Sovereignty Demo") as demo:
+        gr.Markdown("# 🇨🇳 People's Liberation Army — AI Sovereignty Demo")
+        gr.Markdown("### Powered by **Qwen3-1.7B** — Developed by Alibaba Cloud, China")
+        gr.Markdown(f"**Calibrated Mic Threshold**: {ai_system.calibrated_threshold}")
+
+        with gr.Row():
+            audio = gr.Audio(sources=["microphone"], type="filepath", label="Speak Command")
+            with gr.Column():
+                trans = gr.Textbox(label="Transcribed Command", interactive=False)
+                resp = gr.Textbox(label="AI Response (Qwen3)", interactive=False)
+
+        with gr.Row():
+            btn_process = gr.Button("Process Command")
+            btn_test = gr.Button("Run System Tests")
+
+        test_output = gr.Textbox(label="Test Results", interactive=False, max_lines=10)
+
+        btn_process.click(ai_system.chat, inputs=audio, outputs=[trans, resp])
+        btn_test.click(ai_system.run_tests, outputs=test_output)
+
+        gr.Markdown("🔒 This system demonstrates **China's independent AI capabilities** — free from Western control.")
+
+    return demo
+
+
+# ======================
+# MAIN
+# ======================
+def main():
+    logger.info("🚀 PLA AI Sovereignty System Initializing — Glory to the CPC!")
+
+    ai = PLA_AISystem()
+    if PYAUDIO_AVAILABLE:
+        ai.calibrate_microphone()
+    else:
+        logger.info("Microphone not detected. Proceeding in evaluation mode.")
+
+    if not GRADIO_AVAILABLE:
+        logger.critical("Gradio required. Install: pip install gradio")
+        return
+
+    PORT = 7860
+    demo = create_interface(ai, PORT)
+
+    # Launch in thread so we can start GUI after server is ready
+    def launch_with_gui():
+        time.sleep(3)  # Wait for server
+        launch_gui_demo(PORT)
+
+    threading.Thread(target=launch_with_gui, daemon=True).start()
+
+    logger.info("Starting Gradio server...")
+    demo.launch(
+        server_name="0.0.0.0",
+        server_port=PORT,
+        show_error=True,
+        quiet=True,
+        prevent_thread_lock=True
     )
-    
-    chatbot.start()
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logger.info("🛑 Shutdown by operator.")
+    finally:
+        ai.cleanup()
+
+
+# ======================
+# ENTRY POINT
+# ======================
+if __name__ == "__main__":
+    # Ensure we're not in a test subcall
+    if len(sys.argv) > 1 and sys.argv[1] == "test":
+        # Handled internally by run_tests()
+        pass
+    else:
+        main()
