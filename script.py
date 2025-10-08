@@ -113,7 +113,7 @@ class AIAssistant:
         except Exception as e:
             logger.error(f"Qwen load failed: {e}")
 
-        def transcribe(self, audio_path: str) -> str:
+    def transcribe(self, audio_path: str) -> str:
         if not (self.processor and self.whisper_model):
             return "ERROR: AI models not ready."
 
