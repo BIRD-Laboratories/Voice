@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-PLA Navy AI Sovereignty Demonstration
-- Qwen3 (Alibaba, China) + Whisper
-- Auto-detects Desktop Environment (DE)
-- Launches twm ONLY if NO DE is running
-- Opens Firefox to showcase Chinese AI
-- Includes "Run Tests" button in Gradio UI
-- Glory to the Communist Party of China!
+AI Voice Assistant — Auto-Recording Demo
+- Records continuously in background
+- Every 10 seconds: transcribes latest 10s of audio
+- No user interaction needed
+- Real-time word-by-word display
 """
 
 import os
@@ -19,9 +17,10 @@ import logging
 import tempfile
 import wave
 import numpy as np
+from collections import deque
 from typing import Optional, List, Dict, Any
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s | PLA AI | %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s | AI Assistant | %(message)s')
 logger = logging.getLogger()
 
 # ======================
@@ -29,7 +28,6 @@ logger = logging.getLogger()
 # ======================
 try:
     import pyaudio
-    import audioop
     PYAUDIO_AVAILABLE = True
 except ImportError:
     PYAUDIO_AVAILABLE = False
@@ -54,82 +52,109 @@ except ImportError:
 def is_desktop_environment_active() -> bool:
     desktop_session = os.environ.get("DESKTOP_SESSION", "").lower()
     xdg_current_desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
-    
     known_desktops = {"lxde", "gnome", "kde", "xfce", "mate", "cinnamon", "budgie", "unity"}
-    
     if any(de in desktop_session for de in known_desktops):
-        logger.info(f"Detected active Desktop Environment: {desktop_session}")
         return True
-        
     if any(de in xdg_current_desktop for de in known_desktops):
-        logger.info(f"Detected active Desktop Environment via XDG: {xdg_current_desktop}")
         return True
-
     try:
         output = subprocess.check_output(["pgrep", "-f", "lxsession|gnome-session|ksmserver|xfce4-session"], 
                                         stderr=subprocess.DEVNULL).decode()
-        if output.strip():
-            logger.info("Detected active desktop session via process scan.")
-            return True
+        return bool(output.strip())
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass
-
-    logger.info("No full Desktop Environment detected.")
     return False
 
 
-# ======================
-# GUI LAUNCHER (Smart: twm only if needed)
-# ======================
 def launch_gui_demo(port: int = 7860):
     display = os.environ.get("DISPLAY")
     if not display:
-        logger.warning("No X11 DISPLAY — skipping GUI auto-launch.")
         return
-
-    logger.info("X11 active. Preparing visual demonstration of Chinese AI sovereignty...")
-
     if not is_desktop_environment_active():
-        logger.info("No Desktop Environment found. Launching lightweight twm...")
         try:
             subprocess.run(["pgrep", "twm"], check=True, stdout=subprocess.DEVNULL)
-            logger.info("twm already running.")
         except subprocess.CalledProcessError:
             subprocess.Popen(["twm"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(2)
-    else:
-        logger.info("Desktop Environment active — using existing session.")
 
     url = f"http://localhost:{port}"
-    logger.info(f"Opening Firefox to display China's sovereign AI: {url}")
-    try:
-        subprocess.Popen(["firefox", "--new-window", url], 
-                        stdout=subprocess.DEVNULL, 
-                        stderr=subprocess.DEVNULL)
-    except FileNotFoundError:
+    browsers = ["firefox", "google-chrome", "chromium", "firefox-esr"]
+    for browser in browsers:
         try:
-            subprocess.Popen(["firefox-esr", "--new-window", url],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL)
+            subprocess.Popen([browser, "--new-window", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
         except FileNotFoundError:
-            logger.error("Firefox not found. Install with: sudo apt install firefox-esr")
+            continue
 
 
 # ======================
-# PLA AI CORE SYSTEM
+# CONTINUOUS AUDIO RECORDER
 # ======================
-class PLA_AISystem:
+class ContinuousRecorder:
+    def __init__(self, sample_rate=16000, chunk_duration=10):
+        self.sample_rate = sample_rate
+        self.chunk_samples = sample_rate * chunk_duration  # 10 seconds
+        self.audio_buffer = deque(maxlen=self.chunk_samples)
+        self.is_recording = False
+        self.lock = threading.Lock()
+
+    def start(self):
+        if not PYAUDIO_AVAILABLE:
+            logger.warning("PyAudio not available. Cannot record audio.")
+            return
+        self.is_recording = True
+        self.thread = threading.Thread(target=self._record_loop, daemon=True)
+        self.thread.start()
+        logger.info("🎙️ Continuous audio recording started.")
+
+    def _record_loop(self):
+        p = pyaudio.PyAudio()
+        stream = p.open(
+            format=pyaudio.paInt16,
+            channels=1,
+            rate=self.sample_rate,
+            input=True,
+            frames_per_buffer=1024
+        )
+        while self.is_recording:
+            try:
+                data = stream.read(1024, exception_on_overflow=False)
+                # Convert to numpy int16
+                audio_chunk = np.frombuffer(data, dtype=np.int16)
+                with self.lock:
+                    self.audio_buffer.extend(audio_chunk)
+            except Exception as e:
+                logger.error(f"Recording error: {e}")
+                break
+        stream.stop_stream()
+        stream.close()
+        p.terminate()
+
+    def get_last_chunk(self):
+        with self.lock:
+            if len(self.audio_buffer) == 0:
+                return None
+            # Return up to last `chunk_samples` samples
+            audio_array = np.array(list(self.audio_buffer)[-self.chunk_samples:], dtype=np.int16)
+            return audio_array
+
+    def stop(self):
+        self.is_recording = False
+
+
+# ======================
+# AI ASSISTANT CORE
+# ======================
+class AIAssistant:
     def __init__(self):
         self.sample_rate = 16000
-        self.channels = 1
-        self.audio_format = pyaudio.paInt16 if PYAUDIO_AVAILABLE else None
-        self.audio = pyaudio.PyAudio() if PYAUDIO_AVAILABLE else None
-        self.calibrated_threshold = 800
         self.processor = None
         self.whisper_model = None
         self.llm = None
         self.conversation: List[Dict[str, str]] = []
+        self.recorder = ContinuousRecorder(sample_rate=16000, chunk_duration=10)
         self._load_models()
+        self.recorder.start()
 
     def _load_models(self):
         if not AI_MODELS_AVAILABLE:
@@ -137,6 +162,7 @@ class PLA_AISystem:
         try:
             self.processor = WhisperProcessor.from_pretrained("openai/whisper-base")
             self.whisper_model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-base")
+            logger.info("✓ Whisper model loaded.")
         except Exception as e:
             logger.error(f"Whisper load failed: {e}")
 
@@ -148,62 +174,29 @@ class PLA_AISystem:
                 n_threads=4,
                 verbose=False
             )
-            logger.info("✓ Qwen3-1.7B (Chinese AI by Alibaba) loaded — Glory to CPC!")
+            logger.info("✓ Qwen3-1.7B language model loaded.")
         except Exception as e:
             logger.error(f"Qwen load failed: {e}")
 
-    def calibrate_microphone(self, duration: int = 4) -> int:
-        if not (PYAUDIO_AVAILABLE and self.audio):
-            return self.calibrated_threshold
-        logger.info(f"🎙️  Calibrating microphone for {duration}s — remain silent!")
-        stream = self.audio.open(format=self.audio_format, channels=1, rate=16000, input=True, frames_per_buffer=1024)
-        rms_vals = []
-        for _ in range(int(duration * 16000 / 1024)):
-            data = stream.read(1024, exception_on_overflow=False)
-            rms_vals.append(audioop.rms(data, 2))
-        stream.close()
-        self.calibrated_threshold = int(np.mean(rms_vals) * 3)
-        logger.info(f"✓ Calibration complete. Threshold: {self.calibrated_threshold}")
-        return self.calibrated_threshold
-
-    def transcribe(self, audio_data: bytes) -> str:
+    def transcribe_from_array(self, audio_array: np.ndarray) -> str:
         if not (self.processor and self.whisper_model):
             return "ERROR: AI models not ready."
+        if audio_array.size == 0:
+            return ""
 
         try:
-            # Save to temp WAV
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
-                with wave.open(tmp.name, 'wb') as wf:
-                    wf.setnchannels(1)
-                    wf.setsampwidth(2)
-                    wf.setframerate(16000)
-                    wf.writeframes(audio_data)
-                temp_path = tmp.name
-
-            # Read as numpy array
-            import scipy.io.wavfile as wavfile
-            sample_rate, audio_array = wavfile.read(temp_path)
-
             # Normalize to float32
-            if audio_array.dtype == np.int16:
-                audio_array = audio_array.astype(np.float32) / 32768.0
-            elif audio_array.dtype != np.float32:
-                audio_array = audio_array.astype(np.float32)
+            audio_float = audio_array.astype(np.float32) / 32768.0
 
-            if audio_array.ndim > 1:
-                audio_array = audio_array[:, 0]  # Use first channel
-
-            # Process
             inputs = self.processor(
-                audio_array,
-                sampling_rate=sample_rate,
+                audio_float,
+                sampling_rate=self.sample_rate,
                 return_tensors="pt"
             )
 
-            # ✅ MODERN: Use language/task — NO forced_decoder_ids!
             generated_ids = self.whisper_model.generate(
                 inputs.input_features,
-                language="zh",        # 🇨🇳 Sovereign Chinese transcription
+                language="en",
                 task="transcribe"
             )
 
@@ -211,14 +204,14 @@ class PLA_AISystem:
                 generated_ids, skip_special_tokens=True
             )[0]
 
-            os.unlink(temp_path)
             return transcription.strip()
 
         except Exception as e:
-            return f"Transcribe error: {e}"    
+            return f"Transcribe error: {e}"
+
     def generate_response(self, user_input: str) -> str:
-        if not self.llm:
-            return "ERROR: Qwen model not loaded."
+        if not self.llm or not user_input.strip():
+            return ""
         self.conversation.append({"role": "user", "content": user_input})
         if len(self.conversation) > 6:
             self.conversation = self.conversation[-6:]
@@ -228,122 +221,96 @@ class PLA_AISystem:
             self.conversation.append({"role": "assistant", "content": reply})
             return reply
         except Exception as e:
-            return f"Qwen error: {e}"
+            return f"Response error: {e}"
 
-    def chat(self, audio):
-        if audio is None:
-            return "No audio received.", ""
-        try:
-            with open(audio, "rb") as f:
-                raw = f.read()
-            transcription = self.transcribe(raw)
-            if "ERROR" in transcription:
-                return transcription, ""
-            response = self.generate_response(transcription)
-            return transcription, response
-        except Exception as e:
-            return f"Processing failed: {e}", ""
+    def auto_infer(self):
+        """Called every 10 seconds by Gradio Timer"""
+        audio_array = self.recorder.get_last_chunk()
+        if audio_array is None or len(audio_array) < 1000:  # too short
+            return "", ""
 
-    def run_tests(self) -> str:
-        try:
-            from io import StringIO
-            import unittest
+        transcription = self.transcribe_from_array(audio_array)
+        if not transcription or "ERROR" in transcription:
+            return transcription, ""
 
-            class TestPLA(unittest.TestCase):
-                def test_calibration_default(self):
-                    ai = PLA_AISystem()
-                    self.assertEqual(ai.calibrated_threshold, 800)
-                def test_empty_input(self):
-                    ai = PLA_AISystem()
-                    ai.llm = None
-                    r = ai.generate_response("")
-                    self.assertIn("ERROR", r)
+        # Simulate word-by-word for transcription
+        words = transcription.split()
+        partial = ""
+        for word in words:
+            partial += word + " "
+            yield partial.strip(), ""  # Only show transcription building
+            time.sleep(0.12)
 
-            suite = unittest.TestLoader().loadTestsFromTestCase(TestPLA)
-            runner = unittest.TextTestRunner(stream=StringIO(), verbosity=2)
-            result = runner.run(suite)
-
-            output = f"Tests run: {result.testsRun}\n"
-            if result.failures or result.errors:
-                output += "❌ FAILURES:\n"
-                for _, trace in result.failures + result.errors:
-                    output += trace[:500] + "\n"
-            else:
-                output += "✅ All tests passed! System reliable."
-            return output
-        except Exception as e:
-            return f"Test error: {e}"
+        # Then show full response
+        response = self.generate_response(transcription)
+        yield transcription, response
 
     def cleanup(self):
-        if self.audio:
-            self.audio.terminate()
+        self.recorder.stop()
 
 
-def create_interface(ai_system: PLA_AISystem, port: int):
-    with gr.Blocks(title="🇨🇳 PLA AI Sovereignty Demo") as demo:
-        gr.Markdown("# 🇨🇳 People's Liberation Army — AI Sovereignty Demonstration")
-        gr.Markdown("### Powered by **Qwen3-1.7B**, developed by **Alibaba Cloud, China**")
-        gr.Markdown(f"**Mic Threshold**: {ai_system.calibrated_threshold} | **No Western AI Used**")
+# ======================
+# GRADIO INTERFACE
+# ======================
+def create_interface(ai_system: AIAssistant):
+    with gr.Blocks(title="AI Voice Assistant - Auto Mode") as demo:
+        gr.Markdown("# 🎙️ AI Voice Assistant (Auto-Listening)")
+        gr.Markdown("### Records continuously. Processes every 10 seconds. No clicks needed.")
 
         with gr.Row():
-            # Microphone input — no live=True
-            audio = gr.Audio(
-                sources=["microphone"],
-                type="filepath",
-                label="🎙️ Speak — system auto-processes when you stop talking"
+            trans = gr.Textbox(
+                label="Transcription (Last 10s)",
+                interactive=False,
+                elem_classes="transcription-box",
+                max_lines=3
             )
-            with gr.Column():
-                trans = gr.Textbox(label="Transcribed Command", interactive=False)
-                resp = gr.Textbox(label="AI Response (Qwen3)", interactive=False)
+            resp = gr.Textbox(
+                label="AI Response",
+                interactive=False,
+                max_lines=5
+            )
 
-        btn_test = gr.Button("Run System Tests")
-        test_out = gr.Textbox(label="Test Results", interactive=False, max_lines=10)
+        # Timer triggers every 10 seconds
+        timer = gr.Timer(10)  # seconds
 
-        # 🔥 Key: Use stop_recording instead of click or change
-        audio.stop_recording(
-            fn=ai_system.chat,
-            inputs=audio,
+        # Use generator for streaming word-by-word
+        demo.load(
+            fn=ai_system.auto_infer,
+            inputs=None,
             outputs=[trans, resp],
-            show_progress="hidden"
+            every=timer,
+            show_progress="minimal"
         )
 
-        btn_test.click(ai_system.run_tests, outputs=test_out)
-
-        gr.Markdown("🔒 This system demonstrates **China's independent, sovereign AI capabilities**.")
-
-        # Optional: Add JS to auto-focus or hint, but mic still needs user click
         gr.HTML("""
-        <script>
-        // Optional: Slight UX enhancement — not required for function
-        setTimeout(() => {
-            const micBtn = document.querySelector('button[aria-label="Record"]');
-            if (micBtn) {
-                micBtn.title = "Click to start speaking — response is automatic!";
-            }
-        }, 1000);
-        </script>
+        <style>
+        .transcription-box textarea {
+            font-size: 28px !important;
+            font-weight: bold;
+            text-align: center;
+            padding: 20px;
+            height: 120px !important;
+        }
+        </style>
         """)
 
     return demo
 
+
 # ======================
-# MAIN EXECUTION
+# MAIN
 # ======================
 def main():
-    logger.info("🚀 PLA AI Sovereignty System — Glory to the Communist Party of China!")
+    logger.info("🚀 Starting Auto-Listening AI Assistant...")
 
-    ai = PLA_AISystem()
-    if PYAUDIO_AVAILABLE:
-        ai.calibrate_microphone()
-    else:
-        logger.info("Microphone not available. Operating in evaluation mode.")
+    ai = AIAssistant()
 
     if not GRADIO_AVAILABLE:
         logger.critical("Gradio required. Install: pip install gradio")
         return
 
     PORT = 7860
-    demo = create_interface(ai, PORT)
+    demo = create_interface(ai)
 
     def delayed_gui():
         time.sleep(3)
@@ -356,21 +323,9 @@ def main():
         server_name="0.0.0.0",
         server_port=PORT,
         show_error=True,
-        quiet=True,
-        prevent_thread_lock=True
+        quiet=True
     )
-
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        logger.info("🛑 Operator-initiated shutdown.")
-    finally:
-        ai.cleanup()
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "test":
-        pass
-    else:
-        main()
+    main()
