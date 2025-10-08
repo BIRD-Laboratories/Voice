@@ -52,11 +52,6 @@ except ImportError:
 # DESKTOP ENVIRONMENT DETECTION
 # ======================
 def is_desktop_environment_active() -> bool:
-    """
-    Detect if a full Desktop Environment is running.
-    Returns True if LXDE, GNOME, KDE, XFCE, etc. are active.
-    """
-    # Method 1: Check common DE environment variables
     desktop_session = os.environ.get("DESKTOP_SESSION", "").lower()
     xdg_current_desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
     
@@ -70,7 +65,6 @@ def is_desktop_environment_active() -> bool:
         logger.info(f"Detected active Desktop Environment via XDG: {xdg_current_desktop}")
         return True
 
-    # Method 2: Check for running desktop processes (fallback)
     try:
         output = subprocess.check_output(["pgrep", "-f", "lxsession|gnome-session|ksmserver|xfce4-session"], 
                                         stderr=subprocess.DEVNULL).decode()
@@ -88,7 +82,6 @@ def is_desktop_environment_active() -> bool:
 # GUI LAUNCHER (Smart: twm only if needed)
 # ======================
 def launch_gui_demo(port: int = 7860):
-    """Launch Firefox to showcase AI. Start twm ONLY if no DE is running."""
     display = os.environ.get("DISPLAY")
     if not display:
         logger.warning("No X11 DISPLAY — skipping GUI auto-launch.")
@@ -96,21 +89,17 @@ def launch_gui_demo(port: int = 7860):
 
     logger.info("X11 active. Preparing visual demonstration of Chinese AI sovereignty...")
 
-    # Only launch twm if NO desktop environment is running
     if not is_desktop_environment_active():
         logger.info("No Desktop Environment found. Launching lightweight twm...")
         try:
-            # Check if twm is already running
             subprocess.run(["pgrep", "twm"], check=True, stdout=subprocess.DEVNULL)
             logger.info("twm already running.")
         except subprocess.CalledProcessError:
-            # Not running — start it
             subprocess.Popen(["twm"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(2)
     else:
         logger.info("Desktop Environment active — using existing session.")
 
-    # Launch Firefox to showcase the demo
     url = f"http://localhost:{port}"
     logger.info(f"Opening Firefox to display China's sovereign AI: {url}")
     try:
@@ -118,7 +107,6 @@ def launch_gui_demo(port: int = 7860):
                         stdout=subprocess.DEVNULL, 
                         stderr=subprocess.DEVNULL)
     except FileNotFoundError:
-        # Fallback to firefox-esr (common on Debian/RPi)
         try:
             subprocess.Popen(["firefox-esr", "--new-window", url],
                             stdout=subprocess.DEVNULL,
@@ -178,13 +166,15 @@ class PLA_AISystem:
         logger.info(f"✓ Calibration complete. Threshold: {self.calibrated_threshold}")
         return self.calibrated_threshold
 
-    def transcribe(self, audio_ bytes) -> str:
+    def transcribe(self, audio_data: bytes) -> str:  # ✅ FIXED: was "audio_ bytes"
         if not (self.processor and self.whisper_model):
             return "ERROR: AI models not ready."
         try:
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
                 with wave.open(tmp.name, 'wb') as wf:
-                    wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(16000)
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(16000)
                     wf.writeframes(audio_data)
                 with open(tmp.name, "rb") as f:
                     inputs = self.processor(f.read(), sampling_rate=16000, return_tensors="pt")
@@ -259,7 +249,7 @@ class PLA_AISystem:
 
 
 # ======================
-# GRADIO INTERFACE
+# GRADIO INTERFACE (AUTO-PROCESSING)
 # ======================
 def create_interface(ai_system: PLA_AISystem, port: int):
     with gr.Blocks(title="🇨🇳 PLA AI Sovereignty Demo", js="""
@@ -326,7 +316,6 @@ def main():
     PORT = 7860
     demo = create_interface(ai, PORT)
 
-    # Launch GUI after server starts
     def delayed_gui():
         time.sleep(3)
         launch_gui_demo(PORT)
@@ -353,6 +342,6 @@ def main():
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "test":
-        pass  # Handled internally
+        pass
     else:
         main()
