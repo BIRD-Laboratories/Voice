@@ -135,8 +135,8 @@ class PLA_AISystem:
         if not AI_MODELS_AVAILABLE:
             return
         try:
-            self.processor = WhisperProcessor.from_pretrained("openai/whisper-base.en")
-            self.whisper_model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-base.en")
+            self.processor = WhisperProcessor.from_pretrained("openai/whisper-base")
+            self.whisper_model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-base")
         except Exception as e:
             logger.error(f"Whisper load failed: {e}")
 
@@ -171,49 +171,51 @@ class PLA_AISystem:
             return "ERROR: AI models not ready."
 
         try:
-            # Write audio_data to a temporary WAV file
+            # Save to temp WAV
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
                 with wave.open(tmp.name, 'wb') as wf:
                     wf.setnchannels(1)
-                    wf.setsampwidth(2)  # 16-bit
+                    wf.setsampwidth(2)
                     wf.setframerate(16000)
                     wf.writeframes(audio_data)
                 temp_path = tmp.name
 
-            # ✅ CORRECT: Read the WAV file as raw audio samples (not raw bytes!)
+            # Read as numpy array
             import scipy.io.wavfile as wavfile
             sample_rate, audio_array = wavfile.read(temp_path)
 
-            # Ensure audio is float32 in [-1, 1] range (Whisper expects this)
+            # Normalize to float32
             if audio_array.dtype == np.int16:
                 audio_array = audio_array.astype(np.float32) / 32768.0
-            elif audio_array.dtype == np.int32:
-                audio_array = audio_array.astype(np.float32) / 2147483648.0
             elif audio_array.dtype != np.float32:
                 audio_array = audio_array.astype(np.float32)
 
-            # If stereo, take first channel
             if audio_array.ndim > 1:
-                audio_array = audio_array[:, 0]
+                audio_array = audio_array[:, 0]  # Use first channel
 
-            # Process with Whisper
+            # Process
             inputs = self.processor(
                 audio_array,
                 sampling_rate=sample_rate,
                 return_tensors="pt"
             )
 
-            # Generate transcription
-            ids = self.whisper_model.generate(inputs.input_features)
-            text = self.processor.batch_decode(ids, skip_special_tokens=True)[0]
+            # ✅ MODERN: Use language/task — NO forced_decoder_ids!
+            generated_ids = self.whisper_model.generate(
+                inputs.input_features,
+                language="zh",        # 🇨🇳 Sovereign Chinese transcription
+                task="transcribe"
+            )
 
-            # Cleanup
+            transcription = self.processor.batch_decode(
+                generated_ids, skip_special_tokens=True
+            )[0]
+
             os.unlink(temp_path)
-            return text.strip()
+            return transcription.strip()
 
         except Exception as e:
-            return f"Transcribe error: {e}"
-    
+            return f"Transcribe error: {e}"    
     def generate_response(self, user_input: str) -> str:
         if not self.llm:
             return "ERROR: Qwen model not loaded."
