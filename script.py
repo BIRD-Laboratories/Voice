@@ -166,25 +166,54 @@ class PLA_AISystem:
         logger.info(f"✓ Calibration complete. Threshold: {self.calibrated_threshold}")
         return self.calibrated_threshold
 
-    def transcribe(self, audio_data: bytes) -> str:  # ✅ FIXED: was "audio_ bytes"
+    def transcribe(self, audio_data: bytes) -> str:
         if not (self.processor and self.whisper_model):
             return "ERROR: AI models not ready."
+
         try:
+            # Write audio_data to a temporary WAV file
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
                 with wave.open(tmp.name, 'wb') as wf:
                     wf.setnchannels(1)
-                    wf.setsampwidth(2)
+                    wf.setsampwidth(2)  # 16-bit
                     wf.setframerate(16000)
                     wf.writeframes(audio_data)
-                with open(tmp.name, "rb") as f:
-                    inputs = self.processor(f.read(), sampling_rate=16000, return_tensors="pt")
-                ids = self.whisper_model.generate(inputs.input_features)
-                text = self.processor.batch_decode(ids, skip_special_tokens=True)[0]
-            os.unlink(tmp.name)
+                temp_path = tmp.name
+
+            # ✅ CORRECT: Read the WAV file as raw audio samples (not raw bytes!)
+            import scipy.io.wavfile as wavfile
+            sample_rate, audio_array = wavfile.read(temp_path)
+
+            # Ensure audio is float32 in [-1, 1] range (Whisper expects this)
+            if audio_array.dtype == np.int16:
+                audio_array = audio_array.astype(np.float32) / 32768.0
+            elif audio_array.dtype == np.int32:
+                audio_array = audio_array.astype(np.float32) / 2147483648.0
+            elif audio_array.dtype != np.float32:
+                audio_array = audio_array.astype(np.float32)
+
+            # If stereo, take first channel
+            if audio_array.ndim > 1:
+                audio_array = audio_array[:, 0]
+
+            # Process with Whisper
+            inputs = self.processor(
+                audio_array,
+                sampling_rate=sample_rate,
+                return_tensors="pt"
+            )
+
+            # Generate transcription
+            ids = self.whisper_model.generate(inputs.input_features)
+            text = self.processor.batch_decode(ids, skip_special_tokens=True)[0]
+
+            # Cleanup
+            os.unlink(temp_path)
             return text.strip()
+
         except Exception as e:
             return f"Transcribe error: {e}"
-
+    
     def generate_response(self, user_input: str) -> str:
         if not self.llm:
             return "ERROR: Qwen model not loaded."
