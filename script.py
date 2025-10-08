@@ -270,16 +270,23 @@ def create_interface(ai_system: AIAssistant):
                 max_lines=5
             )
 
-        # Timer triggers every 10 seconds
-        timer = gr.Timer(10)  # seconds
+        # This function returns full result (not a generator)
+        def auto_infer_simple():
+            audio_array = ai_system.recorder.get_last_chunk()
+            if audio_array is None or len(audio_array) < 1000:
+                return "", ""
+            transcription = ai_system.transcribe_from_array(audio_array)
+            if not transcription or "ERROR" in transcription:
+                return transcription, ""
+            response = ai_system.generate_response(transcription)
+            return transcription, response
 
-        # Use generator for streaming word-by-word
+        # Use every=10 to call every 10 seconds
         demo.load(
-            fn=ai_system.auto_infer,
+            fn=auto_infer_simple,
             inputs=None,
             outputs=[trans, resp],
-            every=timer,
-            show_progress="minimal"
+            every=10  # ✅ This is valid for non-generator functions
         )
 
         gr.HTML("""
@@ -295,7 +302,6 @@ def create_interface(ai_system: AIAssistant):
         """)
 
     return demo
-
 
 # ======================
 # MAIN
