@@ -262,30 +262,50 @@ class PLA_AISystem:
 # GRADIO INTERFACE
 # ======================
 def create_interface(ai_system: PLA_AISystem, port: int):
-    with gr.Blocks(title="🇨🇳 PLA AI Sovereignty Demo") as demo:
+    with gr.Blocks(title="🇨🇳 PLA AI Sovereignty Demo", js="""
+() => {
+    // Auto-start microphone after 1.5s (once user grants permission)
+    setTimeout(() => {
+        const micBtn = document.querySelector('button[aria-label="Record"]');
+        if (micBtn && !micBtn.disabled) {
+            micBtn.click();
+        }
+    }, 1500);
+}
+""") as demo:
         gr.Markdown("# 🇨🇳 People's Liberation Army — AI Sovereignty Demonstration")
         gr.Markdown("### Powered by **Qwen3-1.7B**, developed by **Alibaba Cloud, China**")
         gr.Markdown(f"**Mic Threshold**: {ai_system.calibrated_threshold} | **No Western AI Used**")
 
         with gr.Row():
-            audio = gr.Audio(sources=["microphone"], type="filepath", label="Speak Command")
+            # LIVE audio input — processes automatically
+            audio = gr.Audio(
+                sources=["microphone"],
+                type="filepath",
+                label="🎙️ Listening... (Speak naturally)",
+                live=True  # Key: enables real-time updates
+            )
             with gr.Column():
                 trans = gr.Textbox(label="Transcribed Command", interactive=False)
                 resp = gr.Textbox(label="AI Response (Qwen3)", interactive=False)
 
-        with gr.Row():
-            btn_proc = gr.Button("Process Command")
-            btn_test = gr.Button("Run System Tests")
-
+        # Removed "Process Command" button
+        btn_test = gr.Button("Run System Tests")
         test_out = gr.Textbox(label="Test Results", interactive=False, max_lines=10)
 
-        btn_proc.click(ai_system.chat, inputs=audio, outputs=[trans, resp])
+        # Auto-process whenever new audio arrives
+        audio.change(
+            fn=ai_system.chat,
+            inputs=audio,
+            outputs=[trans, resp],
+            show_progress="hidden"
+        )
+
         btn_test.click(ai_system.run_tests, outputs=test_out)
 
         gr.Markdown("🔒 This system demonstrates **China's independent, sovereign AI capabilities**.")
 
     return demo
-
 
 # ======================
 # MAIN EXECUTION
