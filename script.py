@@ -69,16 +69,22 @@ except ImportError:
 # ======================
 # ONNX WHISPER
 # ======================
+# ======================
+# ONNX WHISPER (Corrected for onnx-community format)
+# ======================
 class ONNXWhisper:
     def __init__(self, model_name="onnx-community/whisper-base"):
-        from huggingface_hub import snapshot_download
-        logger.info("Loading Whisper processor...")
-        self.processor = WhisperProcessor.from_pretrained("onnx-community/whisper-base")
-        logger.info("Downloading ONNX model (first run only)...")
-        model_dir = snapshot_download(repo_id=model_name)
-        model_path = Path(model_dir) / "model.onnx"
-        self.session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
-        logger.info("✓ ONNX Whisper ready.")
+        from optimum.onnxruntime import ORTModelForSpeechSeq2Seq
+        from transformers import WhisperProcessor
+
+        logger.info("Loading ONNX Whisper processor and model...")
+        self.processor = WhisperProcessor.from_pretrained(model_name)
+        self.model = ORTModelForSpeechSeq2Seq.from_pretrained(
+            model_name,
+            use_cache=True,          # uses decoder_with_past if available
+            provider="CPUExecutionProvider"
+        )
+        logger.info("✓ ONNX Whisper (encoder/decoder) loaded successfully.")
 
     def transcribe(self, audio_array: np.ndarray, orig_sr: int) -> str:
         try:
@@ -94,19 +100,34 @@ class ONNXWhisper:
             if audio_array.ndim > 1:
                 audio_array = np.mean(audio_array, axis=1)
 
-            # Resample to 16kHz
+            # Resample to 16kHz if needed
             target_sr = 16000
             if orig_sr != target_sr:
+                from scipy.signal import resample_poly
                 audio_array = resample_poly(audio_array, target_sr, orig_sr)
 
-            # Process
-            inputs = self.processor(audio_array, sampling_rate=target_sr, return_tensors="np")
-            outputs = self.session.run(None, {"input_features": inputs.input_features})
-            transcription = self.processor.batch_decode(outputs[0], skip_special_tokens=True)[0]
+            # Process and generate
+            inputs = self.processor(
+                audio_array,
+                sampling_rate=target_sr,
+                return_tensors="np"
+            )
+
+            # Generate transcription
+            generated_ids = self.model.generate(
+                input_features=inputs.input_features,
+                language="en",      # optional: remove for auto-detect
+                task="transcribe"
+            )
+
+            transcription = self.processor.batch_decode(
+                generated_ids, skip_special_tokens=True
+            )[0]
+
             return transcription.strip()
+
         except Exception as e:
             return f"Transcribe error: {e}"
-
 
 # ======================
 # AUDIO RECORDER
