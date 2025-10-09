@@ -73,7 +73,7 @@ class ONNXWhisper:
     def __init__(self, model_name="onnx-community/whisper-base"):
         from huggingface_hub import snapshot_download
         logger.info("Loading Whisper processor...")
-        self.processor = WhisperProcessor.from_pretrained("openai/whisper-base")
+        self.processor = WhisperProcessor.from_pretrained("onnx-community/whisper-base")
         logger.info("Downloading ONNX model (first run only)...")
         model_dir = snapshot_download(repo_id=model_name)
         model_path = Path(model_dir) / "model.onnx"
