@@ -144,7 +144,7 @@ protobuf
 pynput
 soundfile
 onnxruntime
-optimum
+optimum[onnxruntime]
 EOF
     fi
 }
