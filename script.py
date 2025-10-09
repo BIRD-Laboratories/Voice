@@ -88,6 +88,10 @@ class ONNXWhisper:
 
     def transcribe(self, audio_array: np.ndarray, orig_sr: int) -> str:
         try:
+            # Ensure it's a NumPy array
+            if isinstance(audio_array, str):
+                raise ValueError("Input must be audio array, not file path")
+
             # Normalize to float32
             if audio_array.dtype == np.int16:
                 audio_array = audio_array.astype(np.float32) / 32768.0
@@ -100,30 +104,26 @@ class ONNXWhisper:
             if audio_array.ndim > 1:
                 audio_array = np.mean(audio_array, axis=1)
 
-            # Resample to 16kHz if needed
+            # Ensure 1D
+            audio_array = np.squeeze(audio_array)
+
             target_sr = 16000
             if orig_sr != target_sr:
                 from scipy.signal import resample_poly
                 audio_array = resample_poly(audio_array, target_sr, orig_sr)
 
-            # Process and generate
+            # Critical: Ensure array is contiguous and 1D
+            audio_array = np.ascontiguousarray(audio_array, dtype=np.float32)
+
+            # Process
             inputs = self.processor(
                 audio_array,
                 sampling_rate=target_sr,
                 return_tensors="np"
             )
 
-            # Generate transcription
-            generated_ids = self.model.generate(
-                input_features=inputs.input_features,
-                language="en",      # optional: remove for auto-detect
-                task="transcribe"
-            )
-
-            transcription = self.processor.batch_decode(
-                generated_ids, skip_special_tokens=True
-            )[0]
-
+            outputs = self.session.run(None, {"input_features": inputs.input_features})
+            transcription = self.processor.batch_decode(outputs[0], skip_special_tokens=True)[0]
             return transcription.strip()
 
         except Exception as e:
