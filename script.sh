@@ -141,8 +141,9 @@ scipy
 llama-cpp-python
 sentencepiece
 protobuf
+pynput
 soundfile
-gradio
+onnxruntime
 EOF
     fi
 }
